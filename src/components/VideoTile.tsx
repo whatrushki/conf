@@ -46,7 +46,7 @@ export function VideoTile({ peer, isLocal, isMirrored, isPinned, onPin, isAdmin,
 
   return (
     <div className={`video-tile ${isMirrored ? 'mirrored' : ''} ${peer.isSpeaking ? 'speaking' : ''} ${isPinned ? 'is-stage' : ''} ${isFullscreen ? 'pseudo-fullscreen' : ''}`}>
-      {peer.isCamOn && peer.stream ? (
+      {peer.isCamOn && peer.stream && peer.stream.getVideoTracks().some(t => t.readyState === 'live') ? (
         <video ref={videoRef} autoPlay playsInline muted={isLocal} />
       ) : (
         <div className="tile-avatar">

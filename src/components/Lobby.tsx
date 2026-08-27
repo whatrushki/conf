@@ -1,57 +1,70 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { net } from '../lib/p2p-net';
-import { unlockAudioEngine } from '../lib/audio';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Sparkles, Mic, MicOff, Video, VideoOff, SwitchCamera, VideoIcon } from 'lucide-react';
+import { net, P2PNet } from '../lib/p2p-net';
+import { unlockAudioEngine, localVAD } from '../lib/audio';
+import { Mic, MicOff, Video, VideoOff, SwitchCamera, VideoIcon } from 'lucide-react';
 
 interface LobbyProps {
-  onJoin: (roomId: string) => void;
+  onEnter: (roomId: string) => void;
   myName: string;
   setMyName: (name: string) => void;
   isMicOn: boolean;
-  setIsMicOn: (on: boolean) => void;
   isCamOn: boolean;
-  setIsCamOn: (on: boolean) => void;
+  toggleMic: () => void;
+  toggleCam: () => void;
   currentFacingMode: 'user' | 'environment';
-  setCurrentFacingMode: (mode: 'user' | 'environment') => void;
+  flipCamera: () => void;
   isMirrored: boolean;
   localStream: MediaStream | null;
-  setLocalStream: (stream: MediaStream | null) => void;
+  syncStream: (stream: MediaStream | null) => void;
+  setIsMicOn: (on: boolean) => void;
+  setIsCamOn: (on: boolean) => void;
 }
 
 export function Lobby({
-  onJoin,
+  onEnter,
   myName,
   setMyName,
   isMicOn,
-  setIsMicOn,
   isCamOn,
-  setIsCamOn,
+  toggleMic,
+  toggleCam,
   currentFacingMode,
-  setCurrentFacingMode,
+  flipCamera,
   isMirrored,
   localStream,
-  setLocalStream
+  syncStream,
+  setIsMicOn,
+  setIsCamOn
 }: LobbyProps) {
   const [roomCode, setRoomCode] = useState('');
+  const [busy, setBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const initDone = useRef(false);
 
   useEffect(() => {
+    const hash = window.location.hash.substring(1).trim();
+    if (hash.length >= 3) {
+      setRoomCode(P2PNet.cleanCode(hash));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (initDone.current) return;
+    initDone.current = true;
     let active = true;
+
     const initPreview = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: currentFacingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
-        if (!active) return;
-        setLocalStream(stream);
-        net.localStream = stream;
-        
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+        if (!active) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
         }
+        syncStream(stream);
+        localVAD.start(stream, true);
       } catch (e) {
         console.error('Camera error', e);
         setIsCamOn(false);
@@ -60,39 +73,51 @@ export function Lobby({
     };
     initPreview();
     return () => { active = false; };
-  }, [currentFacingMode, setLocalStream, setIsCamOn, setIsMicOn]);
+  }, [syncStream, setIsCamOn, setIsMicOn]);
 
   useEffect(() => {
-    if (localStream) {
-      const vTrack = localStream.getVideoTracks()[0];
-      if (vTrack) vTrack.enabled = isCamOn;
-      const aTrack = localStream.getAudioTracks()[0];
-      if (aTrack) aTrack.enabled = isMicOn;
+    if (videoRef.current && localStream) {
+      videoRef.current.srcObject = localStream;
     }
-  }, [localStream, isCamOn, isMicOn]);
+  }, [localStream, isCamOn]);
 
-  const handleFlip = async () => {
-    const nextMode = currentFacingMode === 'user' ? 'environment' : 'user';
-    setCurrentFacingMode(nextMode);
-    // Stream re-init handles by useEffect
-  };
+  const resolvedName = () => myName.trim() || (`User-${Math.floor(Math.random() * 900 + 100)}`);
 
   const createRoom = async () => {
+    if (busy) return;
+    setBusy(true);
     unlockAudioEngine();
     try {
-      const code = await net.createRoom(null, myName, isMicOn, isCamOn);
-      onJoin(code);
+      const name = resolvedName();
+      setMyName(name);
+      const code = await net.createRoom(null, name, isMicOn, isCamOn);
+      onEnter(code);
     } catch (e) {
-      alert("Error creating room");
+      alert("Ошибка создания комнаты");
+    } finally {
+      setBusy(false);
     }
   };
 
-  const joinRoom = () => {
-    if (roomCode.length < 3) return alert("Enter code");
+  const joinRoom = async () => {
+    const code = P2PNet.cleanCode(roomCode);
+    if (code.length < 3) return alert("Введите код");
+    if (busy) return;
+    setBusy(true);
     unlockAudioEngine();
-    net.joinRoom(roomCode, { name: myName, isMicOn, isCamOn }).then(() => {
-      onJoin(roomCode);
-    }).catch((e: any) => alert(e.message));
+    const name = resolvedName();
+    setMyName(name);
+    // Сразу уходим в конференцию (как в оригинале prepareJoin)
+    onEnter(code);
+    try {
+      await net.joinRoom(code, { name, isMicOn, isCamOn });
+    } catch (e: any) {
+      alert(e?.message || "Не удалось войти");
+      onEnter(''); // leave — parent should clear; use null via callback
+      // parent expects string — App will handle empty as leave
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -100,7 +125,7 @@ export function Lobby({
       <div className="lobby-card">
         <div className="lobby-preview-pane">
           <div className={`video-tile ${isMirrored && currentFacingMode === 'user' ? 'mirrored' : ''}`}>
-            {isCamOn ? (
+            {isCamOn && localStream?.getVideoTracks().some(t => t.readyState === 'live') ? (
               <video ref={videoRef} autoPlay playsInline muted />
             ) : (
               <div className="tile-avatar">
@@ -109,46 +134,49 @@ export function Lobby({
             )}
           </div>
           <div className="preview-controls">
-            <Button variant="secondary" onClick={() => setIsMicOn(!isMicOn)}>
+            <button type="button" className="studio-btn-secondary" onClick={toggleMic}>
               {isMicOn ? <Mic size={18} /> : <MicOff size={18} />} {isMicOn ? 'Mic' : 'Off'}
-            </Button>
-            <Button variant="secondary" onClick={() => setIsCamOn(!isCamOn)}>
+            </button>
+            <button type="button" className="studio-btn-secondary" onClick={toggleCam}>
               {isCamOn ? <Video size={18} /> : <VideoOff size={18} />} {isCamOn ? 'Cam' : 'Off'}
-            </Button>
-            <Button variant="secondary" size="icon" onClick={handleFlip}>
+            </button>
+            <button type="button" className="studio-btn-secondary" onClick={flipCamera} title="Сменить камеру">
               <SwitchCamera size={18} />
-            </Button>
+            </button>
           </div>
         </div>
         
         <div className="lobby-settings-pane">
           <div className="input-group">
             <label className="studio-label">NAME / CALLSIGN</label>
-            <Input 
-              value={myName} 
-              onChange={e => setMyName(e.target.value)} 
-              placeholder="Your name..." 
+            <input
+              className="studio-input"
+              value={myName}
+              onChange={e => setMyName(e.target.value)}
+              placeholder="Ваше имя..."
               maxLength={18}
             />
           </div>
           
-          <Button onClick={createRoom} className="studio-btn-primary h-auto py-2.5">
+          <button type="button" className="studio-btn-primary" onClick={createRoom} disabled={busy}>
             <VideoIcon size={18} /> Создать встречу
-          </Button>
+          </button>
 
           <div className="divider-text">
             <span>ИЛИ ВХОД ПО КОДУ</span>
           </div>
 
           <div className="join-row">
-            <Input 
-              value={roomCode} 
-              onChange={e => setRoomCode(e.target.value.toUpperCase())} 
-              placeholder="КОД" 
+            <input
+              className="studio-input input-room-code"
+              value={roomCode}
+              onChange={e => setRoomCode(e.target.value.toUpperCase())}
+              placeholder="КОД"
               maxLength={6}
-              className="input-room-code flex-1"
             />
-            <Button onClick={joinRoom} variant="secondary">Войти</Button>
+            <button type="button" className="studio-btn-secondary" onClick={joinRoom} disabled={busy}>
+              Войти
+            </button>
           </div>
         </div>
       </div>

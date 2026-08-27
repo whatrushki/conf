@@ -119,14 +119,16 @@ export class P2PNet {
 
   async joinRoom(code: string, myData: any = {}) {
     this.isHost = false;
-    this.roomId = P2PNet.cleanCode(code);
+    const cleaned = P2PNet.cleanCode(code);
     this.userName = myData.name || 'Guest';
     this.initialMicState = myData.isMicOn ?? true;
     this.initialCamState = myData.isCamOn ?? true;
-    const hostPeerId = `${this.appPrefix}-${this.roomId}`;
+    const hostPeerId = `${this.appPrefix}-${cleaned}`;
 
     this._audit('NET', `Подключение к сессии: ${hostPeerId}`);
     await this._initPeer();
+    // roomId после _initPeer: destroy() внутри init обнуляет его
+    this.roomId = cleaned;
     this._startHeartbeat();
     this._startWatchdog();
 
@@ -160,8 +162,10 @@ export class P2PNet {
 
   _initPeer(fixedId: string | null = null) {
     return new Promise((resolve, reject) => {
+      const savedRoomId = this.roomId;
       this.destroy(true);
       this.isDestroyed = false;
+      this.roomId = savedRoomId;
 
       const config = {
         debug: 0,

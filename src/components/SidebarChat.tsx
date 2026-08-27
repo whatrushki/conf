@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { ChatMessage } from '../hooks/useConference';
 import { net } from '../lib/p2p-net';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
 import { X, Send, MessageSquare } from 'lucide-react';
 import { soundFx } from '../lib/audio';
 
@@ -49,15 +47,16 @@ export function SidebarChat({ isOpen, onClose, messages, myName, setMessages }: 
       </div>
       
       <div className="chat-input-box">
-        <Input 
-          value={text} 
-          onChange={e => setText(e.target.value)} 
-          onKeyDown={e => e.key === 'Enter' && send()} 
-          placeholder="Отправить сообщение..." 
+        <input
+          className="studio-input"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          placeholder="Отправить сообщение..."
         />
-        <Button onClick={send} className="send-btn">
+        <button type="button" className="send-btn" onClick={send}>
           <Send size={18} />
-        </Button>
+        </button>
       </div>
     </aside>
   );

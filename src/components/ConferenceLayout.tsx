@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useConference } from '../hooks/useConference';
 import { VideoTile, ScreenTile } from './VideoTile';
 import { SidebarChat } from './SidebarChat';
 import { BottomBar } from './BottomBar';
 import { net } from '../lib/p2p-net';
 import { toast } from 'sonner';
-import { X } from 'lucide-react';
-import { Button } from './ui/button';
+import { X, Hand, MonitorUp, SwitchCamera, TerminalSquare, MessageSquare, UserPlus, Settings } from 'lucide-react';
 
 export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConference> }) {
   const [pinnedId, setPinnedId] = useState<string | null>(null);
@@ -19,21 +18,26 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
   };
 
   const handleToggleChat = () => {
-    setIsChatOpen(prev => !prev);
-    if (!isChatOpen) conf.setUnreadCount(0);
+    setIsChatOpen(prev => {
+      if (!prev) conf.setUnreadCount(0);
+      return !prev;
+    });
     setMobileSheetOpen(false);
   };
 
-  // Reactions
   const EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '👏', '😮', '🤔'];
   const handleReaction = (emoji: string) => {
     conf.spawnReaction(emoji);
     net.broadcast({ type: 'REACTION', emoji });
-    setShowReactions(false);
+    // панель остаётся открытой — закрытие только по повторному клику
   };
 
-  const gridCount = Object.keys(conf.peers).length + Object.keys(conf.screenStreams).length + (conf.isScreenSharing ? 1 : 0) + 1; // +1 for local cam
-  
+  const gridCount =
+    Object.keys(conf.peers).length +
+    Object.keys(conf.screenStreams).length +
+    (conf.isScreenSharing ? 1 : 0) +
+    1;
+
   let gridClass = 'count-many';
   if (pinnedId) {
     gridClass = 'has-stage';
@@ -59,6 +63,7 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
     if (conf.isScreenSharing) {
       net.stopScreenShare();
       conf.setIsScreenSharing(false);
+      conf.setLocalScreenStream(null);
       if (pinnedId === 'local-screen') setPinnedId(null);
     } else {
       try {
@@ -69,6 +74,7 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
         stream.getVideoTracks()[0].onended = () => {
           net.stopScreenShare();
           conf.setIsScreenSharing(false);
+          conf.setLocalScreenStream(null);
         };
       } catch (err: any) {
         if (err.name !== 'NotAllowedError') toast.error("Ошибка экрана");
@@ -77,13 +83,17 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
     setMobileSheetOpen(false);
   };
 
+  const toggleHand = () => {
+    const next = !conf.isHandRaised;
+    conf.setIsHandRaised(next);
+    net.broadcast({ type: 'HAND_RAISE', peerId: net.peer?.id, isRaised: next, name: conf.myName });
+  };
+
   return (
     <div className="conference-container">
-      <div className="conf-main-area">
+      <div className={`conf-main-area ${isChatOpen ? 'chat-open' : ''}`}>
         <div className="conf-video-container">
           <div className={`conf-grid ${gridClass}`}>
-            
-            {/* Local Camera */}
             <VideoTile
               peer={{
                 id: 'local',
@@ -103,7 +113,6 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
               hostId={conf.hostId}
             />
 
-            {/* Local Screen Share */}
             {conf.isScreenSharing && conf.localScreenStream && (
               <ScreenTile
                 screen={{
@@ -118,7 +127,6 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
               />
             )}
 
-            {/* Remote Screen Shares */}
             {Object.values(conf.screenStreams).map(screen => (
               <ScreenTile
                 key={`screen-${screen.id}`}
@@ -134,7 +142,6 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
               />
             ))}
 
-            {/* Remote Cameras */}
             {Object.values(conf.peers).map(peer => (
               <VideoTile
                 key={peer.id}
@@ -149,87 +156,88 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
             ))}
           </div>
           
-          {/* Reactions popover */}
           {showReactions && (
             <div className="reactions-popover">
               {EMOJIS.map(e => (
-                <button key={e} className="reaction-item-btn" onClick={() => handleReaction(e)}>{e}</button>
+                <button key={e} type="button" className="reaction-item-btn" onClick={() => handleReaction(e)}>{e}</button>
               ))}
-              <button className="reaction-item-close" onClick={() => setShowReactions(false)}>
+              <button type="button" className="reaction-item-close" onClick={() => setShowReactions(false)}>
                 <X size={16} />
               </button>
             </div>
           )}
 
-          {/* Floating Reactions */}
           {conf.reactions.map(r => (
             <div key={r.id} className="p2p-float-item" style={{ left: r.left }}>{r.emoji}</div>
           ))}
         </div>
 
-        <SidebarChat 
-          isOpen={isChatOpen} 
-          onClose={() => setIsChatOpen(false)} 
-          messages={conf.messages} 
+        <SidebarChat
+          isOpen={isChatOpen}
+          onClose={() => setIsChatOpen(false)}
+          messages={conf.messages}
           myName={conf.myName}
           setMessages={conf.setMessages}
         />
       </div>
 
-      <BottomBar 
+      <BottomBar
         roomId={conf.roomId || ''}
-        isMicOn={conf.isMicOn} toggleMic={() => conf.setIsMicOn(!conf.isMicOn)}
-        isCamOn={conf.isCamOn} toggleCam={() => conf.setIsCamOn(!conf.isCamOn)}
+        isMicOn={conf.isMicOn} toggleMic={conf.toggleMic}
+        isCamOn={conf.isCamOn} toggleCam={conf.toggleCam}
         isScreenSharing={conf.isScreenSharing} toggleScreenShare={toggleScreen}
-        isHandRaised={conf.isHandRaised} toggleHandRaise={() => {
-          conf.setIsHandRaised(!conf.isHandRaised);
-          net.broadcast({ type: 'HAND_RAISE', peerId: net.peer?.id, isRaised: !conf.isHandRaised, name: conf.myName });
-        }}
-        onFlipCam={async () => {
-          const next = conf.currentFacingMode === 'user' ? 'environment' : 'user';
-          conf.setCurrentFacingMode(next);
-        }}
+        isHandRaised={conf.isHandRaised} toggleHandRaise={toggleHand}
+        onFlipCam={conf.flipCamera}
         onToggleChat={handleToggleChat}
-        onToggleReactions={() => setShowReactions(!showReactions)}
+        onToggleReactions={() => setShowReactions(v => !v)}
         onLeave={conf.leaveCall}
-        onInfo={() => { /* Handle in App level Modal */ window.dispatchEvent(new Event('openInvite')) }}
+        onInfo={() => window.dispatchEvent(new Event('openInvite'))}
         unreadCount={conf.unreadCount}
         openMobileSheet={() => setMobileSheetOpen(true)}
       />
 
-      {/* Mobile Sheet */}
       {mobileSheetOpen && (
-        <div className="p2p-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setMobileSheetOpen(false) }}>
-          <div className="meet-bottom-sheet">
-            <div className="sheet-drag-handle"></div>
+        <div className="p2p-modal-backdrop sheet-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setMobileSheetOpen(false); }}>
+          <div className="meet-bottom-sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-drag-handle" />
+
             <div className="sheet-grid-actions">
-              <Button variant="secondary" className="h-16 flex-col" onClick={() => {
-                conf.setIsHandRaised(!conf.isHandRaised);
-                net.broadcast({ type: 'HAND_RAISE', peerId: net.peer?.id, isRaised: !conf.isHandRaised, name: conf.myName });
-                setMobileSheetOpen(false);
-              }}>
-                ✋ Рука
-              </Button>
-              <Button variant="secondary" className="h-16 flex-col" onClick={toggleScreen}>
-                💻 Экран
-              </Button>
-              <Button variant="secondary" className="h-16 flex-col" onClick={() => {
-                conf.setCurrentFacingMode(conf.currentFacingMode === 'user' ? 'environment' : 'user');
-                setMobileSheetOpen(false);
-              }}>
-                📷 Смена
-              </Button>
-              <Button variant="secondary" className="h-16 flex-col text-yellow-400" onClick={() => {
-                window.dispatchEvent(new Event('openAudit'));
-                setMobileSheetOpen(false);
-              }}>
-                💻 Аудит
-              </Button>
+              <button
+                type="button"
+                className={`sheet-tile-btn ${conf.isHandRaised ? 'active' : ''}`}
+                onClick={() => { toggleHand(); setMobileSheetOpen(false); }}
+              >
+                <Hand size={22} />
+                <span>Поднять руку</span>
+              </button>
+              <button type="button" className={`sheet-tile-btn ${conf.isScreenSharing ? 'active' : ''}`} onClick={toggleScreen}>
+                <MonitorUp size={22} />
+                <span>Экран</span>
+              </button>
+              <button type="button" className="sheet-tile-btn" onClick={() => { conf.flipCamera(); setMobileSheetOpen(false); }}>
+                <SwitchCamera size={22} />
+                <span>Сменить камеру</span>
+              </button>
+              <button type="button" className="sheet-tile-btn" onClick={() => { window.dispatchEvent(new Event('openAudit')); setMobileSheetOpen(false); }}>
+                <TerminalSquare size={22} className="text-yellow-400" />
+                <span>Аудит</span>
+              </button>
             </div>
-            <div className="sheet-list-actions mt-4 flex flex-col gap-2">
-              <Button variant="secondary" className="w-full justify-start h-12" onClick={handleToggleChat}>💬 Чат</Button>
-              <Button variant="secondary" className="w-full justify-start h-12" onClick={() => { window.dispatchEvent(new Event('openInvite')); setMobileSheetOpen(false); }}>➕ Пригласить</Button>
-              <Button variant="secondary" className="w-full justify-start h-12" onClick={() => { window.dispatchEvent(new Event('openSettings')); setMobileSheetOpen(false); }}>⚙️ Настройки</Button>
+
+            <div className="sheet-list-actions">
+              <button type="button" className="sheet-list-item" onClick={handleToggleChat}>
+                <MessageSquare size={20} />
+                <span>Сообщения встречи</span>
+                {conf.unreadCount > 0 && <span className="sheet-badge">New</span>}
+              </button>
+              <button type="button" className="sheet-list-item" onClick={() => { window.dispatchEvent(new Event('openInvite')); setMobileSheetOpen(false); }}>
+                <UserPlus size={20} />
+                <span>Пригласить участников</span>
+              </button>
+              <button type="button" className="sheet-list-item" onClick={() => { window.dispatchEvent(new Event('openSettings')); setMobileSheetOpen(false); }}>
+                <Settings size={20} />
+                <span>Настройки</span>
+              </button>
             </div>
           </div>
         </div>

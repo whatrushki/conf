@@ -9,7 +9,6 @@ import { ConferenceLayout } from './components/ConferenceLayout';
 import { Modals } from './components/Modals';
 import { useConference } from './hooks/useConference';
 import { Toaster } from './components/ui/sonner';
-import { P2PNet } from './lib/p2p-net';
 import { TerminalSquare, Settings } from 'lucide-react';
 import './index.css';
 
@@ -20,16 +19,6 @@ export default function App() {
   const [isAuditOpen, setIsAuditOpen] = useState(false);
 
   useEffect(() => {
-    const handleHash = () => {
-      const hash = window.location.hash.substring(1).trim();
-      if (hash.length >= 3) {
-        // We could auto-fill or just let user click join
-        const code = P2PNet.cleanCode(hash);
-        // We will just leave it in URL, Lobby component could read it but we will keep it simple
-      }
-    };
-    handleHash();
-
     const openInvite = () => setIsInviteOpen(true);
     const openSettings = () => setIsSettingsOpen(true);
     const openAudit = () => setIsAuditOpen(true);
@@ -45,11 +34,18 @@ export default function App() {
     };
   }, []);
 
+  const handleEnter = (code: string) => {
+    if (!code) {
+      conf.leaveCall();
+      return;
+    }
+    conf.enterRoom(code);
+  };
+
   return (
     <div className="conf-app" id="appRoot">
       <Toaster theme="dark" position="top-center" />
       
-      {/* Header */}
       <header className="studio-header">
         <div className="studio-logo-area">
           <span className="gemini-sparkle">✦</span>
@@ -71,28 +67,28 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content */}
       {!conf.roomId ? (
-        <Lobby 
-          onJoin={() => {}} // State handles transition
+        <Lobby
+          onEnter={handleEnter}
           myName={conf.myName}
           setMyName={conf.setMyName}
           isMicOn={conf.isMicOn}
-          setIsMicOn={conf.setIsMicOn}
           isCamOn={conf.isCamOn}
-          setIsCamOn={conf.setIsCamOn}
+          toggleMic={conf.toggleMic}
+          toggleCam={conf.toggleCam}
           currentFacingMode={conf.currentFacingMode}
-          setCurrentFacingMode={conf.setCurrentFacingMode}
+          flipCamera={conf.flipCamera}
           isMirrored={conf.isMirrored}
           localStream={conf.localStream}
-          setLocalStream={conf.setLocalStream}
+          syncStream={conf.syncStream}
+          setIsMicOn={conf.setIsMicOn}
+          setIsCamOn={conf.setIsCamOn}
         />
       ) : (
         <ConferenceLayout conf={conf} />
       )}
 
-      {/* Modals */}
-      <Modals 
+      <Modals
         conf={conf}
         isSettingsOpen={isSettingsOpen} setIsSettingsOpen={setIsSettingsOpen}
         isInviteOpen={isInviteOpen} setIsInviteOpen={setIsInviteOpen}

@@ -56,7 +56,8 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
   };
 
   const copyInvite = () => {
-    navigator.clipboard.writeText(net.getShareUrl());
+    const url = conf.roomId ? `${window.location.href.split('#')[0]}#${conf.roomId}` : net.getShareUrl();
+    navigator.clipboard.writeText(url);
     toast.success("Ссылка скопирована");
   };
 
@@ -79,20 +80,23 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
   return (
     <>
       <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="sm:max-w-[500px] bg-background text-foreground border-border">
-          <DialogHeader>
+        <DialogContent className="settings-dialog-content sm:max-w-[500px] bg-[var(--bg-surface)] text-foreground border-[var(--border-subtle)] p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
+          <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <DialogTitle className="flex items-center gap-2"><Settings size={18} /> Настройки</DialogTitle>
           </DialogHeader>
-          <Tabs defaultValue="devices" className="w-full">
-            <TabsList className="w-full bg-muted">
-              <TabsTrigger value="devices" className="flex-1">Оборудование</TabsTrigger>
-              <TabsTrigger value="ui" className="flex-1">UI & Звук</TabsTrigger>
-              <TabsTrigger value="admin" className="flex-1">Админ</TabsTrigger>
-            </TabsList>
+          <Tabs defaultValue="devices" className="w-full flex flex-col min-h-0 flex-1 overflow-hidden">
+            <div className="settings-tabs-scroll shrink-0">
+              <TabsList className="w-full bg-transparent justify-start rounded-none h-auto p-0 px-3">
+                <TabsTrigger value="devices" className="settings-tab-trigger">Оборудование</TabsTrigger>
+                <TabsTrigger value="ui" className="settings-tab-trigger">UI & Звук</TabsTrigger>
+                <TabsTrigger value="admin" className="settings-tab-trigger">Админ</TabsTrigger>
+              </TabsList>
+            </div>
             
-            <TabsContent value="devices" className="space-y-4 pt-4">
+            <div className="settings-body flex-1 overflow-y-auto min-h-0">
+            <TabsContent value="devices" className="space-y-4 mt-0">
               <div className="space-y-2">
-                <label className="text-xs text-muted-foreground font-mono">Камера</label>
+                <label className="studio-label">Камера</label>
                 <select 
                   className="studio-select" 
                   value={selectedVideo} 
@@ -104,7 +108,7 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-xs text-muted-foreground font-mono">Микрофон</label>
+                <label className="studio-label">Микрофон</label>
                 <select 
                   className="studio-select" 
                   value={selectedAudio} 
@@ -122,7 +126,7 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
               <Button onClick={handleDeviceChange} className="w-full studio-btn-primary mt-2 text-black">Применить</Button>
             </TabsContent>
 
-            <TabsContent value="ui" className="space-y-4 pt-4">
+            <TabsContent value="ui" className="space-y-4 mt-0">
               <div className="flex items-center gap-2">
                 <Switch checked={conf.soundEnabled} onCheckedChange={conf.setSoundEnabled} />
                 <span className="text-sm">Звуковые эффекты</span>
@@ -132,12 +136,12 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
                 <span className="text-sm">Всплывающие сообщения поверх видео</span>
               </div>
               <div className="space-y-2 pt-2">
-                <label className="text-xs text-muted-foreground font-mono">Громкость звуков ({Math.round(conf.soundVolume*100)}%)</label>
+                <label className="studio-label">Громкость звуков ({Math.round(conf.soundVolume*100)}%)</label>
                 <Slider min={0} max={1} step={0.05} value={[conf.soundVolume]} onValueChange={v => conf.setSoundVolume(v[0])} />
               </div>
             </TabsContent>
 
-            <TabsContent value="admin" className="space-y-4 pt-4">
+            <TabsContent value="admin" className="space-y-4 mt-0">
               <div className="admin-status-box">
                 <ShieldAlert size={16} />
                 {conf.isAdmin ? 'Вы являетесь администратором комнаты' : `Участник (Хост: ${conf.hostName || 'Host'})`}
@@ -152,7 +156,7 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
                   <span className="text-sm">Разрешить участникам демонстрацию экрана</span>
                 </div>
                 <div className="pt-2">
-                  <label className="text-xs text-muted-foreground font-mono">Участники ({Object.keys(conf.peers).length + 1})</label>
+                  <label className="studio-label">Участники ({Object.keys(conf.peers).length + 1})</label>
                   <ScrollArea className="h-32 rounded border border-border p-2 mt-2">
                     <div className="participant-row mb-1">
                       <span><strong>{conf.myName}</strong> (Вы {conf.isAdmin ? '👑' : ''})</span>
@@ -171,6 +175,7 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
                 </div>
               </div>
             </TabsContent>
+            </div>
           </Tabs>
         </DialogContent>
       </Dialog>
@@ -184,7 +189,11 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
             <div className="text-xs text-muted-foreground font-mono">КОД ВСТРЕЧИ</div>
             <div className="text-2xl font-mono font-bold text-blue-400 tracking-widest">{conf.roomId}</div>
             <div className="p-2 bg-white rounded-md">
-              <QRCodeSVG value={net.getShareUrl()} size={140} fgColor="#131314" />
+              <QRCodeSVG
+                value={conf.roomId ? `${window.location.href.split('#')[0]}#${conf.roomId}` : net.getShareUrl()}
+                size={140}
+                fgColor="#131314"
+              />
             </div>
             <Button onClick={copyInvite} className="w-full studio-btn-primary text-black">
               <Link size={16} className="mr-2" /> Скопировать ссылку

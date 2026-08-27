@@ -42,7 +42,8 @@ export function BottomBar({
   }, []);
 
   const copyRoomLink = () => {
-    navigator.clipboard.writeText(net.getShareUrl());
+    const url = roomId ? `${window.location.href.split('#')[0]}#${roomId}` : net.getShareUrl();
+    navigator.clipboard.writeText(url);
     toast.success("Ссылка скопирована");
   };
 
