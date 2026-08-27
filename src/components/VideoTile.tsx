@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { PeerStatus, ScreenStatus } from '../hooks/useConference';
 import { net } from '../lib/p2p-net';
+import { avatarColorForId } from '../lib/utils';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -9,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Slider } from "./ui/slider";
-import { Mic, MicOff, MoreVertical, Pin, Maximize, Trash2, Crown, StopCircle } from 'lucide-react';
+import { Mic, MicOff, MoreVertical, Pin, Maximize, Trash2, Crown, StopCircle, EyeOff } from 'lucide-react';
 
 interface VideoTileProps {
   peer: PeerStatus;
@@ -27,12 +28,13 @@ export function VideoTile({ peer, isLocal, isMirrored, isPinned, onPin, isAdmin,
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState(peer.volume);
+  const avatarBg = avatarColorForId(peer.id || peer.name);
 
   useEffect(() => {
     if (videoRef.current && peer.stream) {
       videoRef.current.srcObject = peer.stream;
     }
-  }, [peer.stream]);
+  }, [peer.stream, peer.isCamOn]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -43,14 +45,15 @@ export function VideoTile({ peer, isLocal, isMirrored, isPinned, onPin, isAdmin,
 
   const toggleFullscreen = () => setIsFullscreen(!isFullscreen);
   const isHost = hostId === peer.id || (isLocal && net.isHost);
+  const showVideo = peer.isCamOn && peer.stream && peer.stream.getVideoTracks().some(t => t.readyState === 'live');
 
   return (
     <div className={`video-tile ${isMirrored ? 'mirrored' : ''} ${peer.isSpeaking ? 'speaking' : ''} ${isPinned ? 'is-stage' : ''} ${isFullscreen ? 'pseudo-fullscreen' : ''}`}>
-      {peer.isCamOn && peer.stream && peer.stream.getVideoTracks().some(t => t.readyState === 'live') ? (
+      {showVideo ? (
         <video ref={videoRef} autoPlay playsInline muted={isLocal} />
       ) : (
-        <div className="tile-avatar">
-          <span className="material-symbols-outlined">person</span>
+        <div className="tile-avatar" style={{ background: avatarBg, borderColor: 'transparent' }}>
+          <span className="material-symbols-outlined" style={{ color: 'rgba(255,255,255,0.92)' }}>person</span>
         </div>
       )}
 
@@ -131,6 +134,10 @@ export function ScreenTile({ screen, isLocal, isPinned, onPin, isAdmin, onStopAd
   useEffect(() => {
     if (videoRef.current && screen.stream && hasStarted) {
       videoRef.current.srcObject = screen.stream;
+      videoRef.current.play().catch(() => {});
+    }
+    if (videoRef.current && !hasStarted) {
+      videoRef.current.srcObject = null;
     }
   }, [screen.stream, hasStarted]);
 
@@ -141,9 +148,20 @@ export function ScreenTile({ screen, isLocal, isPinned, onPin, isAdmin, onStopAd
     if (onPlay) onPlay(screen.id);
   };
 
+  const stopWatching = () => {
+    setHasStarted(false);
+    setIsFullscreen(false);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      videoRef.current.pause();
+    }
+  };
+
   return (
     <div className={`video-tile screen-tile ${isPinned ? 'is-stage' : ''} ${isFullscreen ? 'pseudo-fullscreen' : ''}`}>
-      <video ref={videoRef} autoPlay playsInline muted={isLocal} />
+      {hasStarted && (
+        <video ref={videoRef} autoPlay playsInline muted={isLocal} />
+      )}
 
       {!hasStarted && (
         <div className="stream-discord-card">
@@ -162,9 +180,16 @@ export function ScreenTile({ screen, isLocal, isPinned, onPin, isAdmin, onStopAd
         <button className="tile-ctrl-btn" onClick={onPin}>
           <Pin size={16} />
         </button>
-        <button className="tile-ctrl-btn" onClick={toggleFullscreen}>
-          <Maximize size={16} />
-        </button>
+        {hasStarted && (
+          <button className="tile-ctrl-btn" onClick={toggleFullscreen}>
+            <Maximize size={16} />
+          </button>
+        )}
+        {!isLocal && hasStarted && (
+          <button className="tile-ctrl-btn" onClick={stopWatching} title="Скрыть стрим">
+            <EyeOff size={16} />
+          </button>
+        )}
         {!isLocal && isAdmin && (
            <DropdownMenu>
            <DropdownMenuTrigger asChild>
@@ -173,6 +198,11 @@ export function ScreenTile({ screen, isLocal, isPinned, onPin, isAdmin, onStopAd
              </button>
            </DropdownMenuTrigger>
            <DropdownMenuContent className="w-48">
+             {hasStarted && (
+               <DropdownMenuItem onClick={stopWatching} className="text-xs cursor-pointer">
+                 <EyeOff size={14} className="mr-2" /> Скрыть стрим
+               </DropdownMenuItem>
+             )}
              <DropdownMenuItem onClick={() => onStopAdmin?.(screen.id)} className="text-destructive cursor-pointer">
                <StopCircle size={14} className="mr-2" /> Остановить показ
              </DropdownMenuItem>
@@ -186,6 +216,11 @@ export function ScreenTile({ screen, isLocal, isPinned, onPin, isAdmin, onStopAd
         <div className="tile-tag">
           <span className="material-symbols-outlined text-blue-400 text-sm">screen_share</span>
           <span>{screen.name}</span>
+          {!isLocal && hasStarted && (
+            <button type="button" className="stream-stop-watch-btn" onClick={stopWatching} title="Скрыть стрим">
+              <EyeOff size={12} />
+            </button>
+          )}
         </div>
       </div>
     </div>

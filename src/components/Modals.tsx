@@ -5,19 +5,10 @@ import { net } from '../lib/p2p-net';
 import { useAuditLogs } from '../lib/audit';
 import { P2PAuditLog } from '../lib/audit';
 import { toast } from 'sonner';
-
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog";
 import { Button } from './ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Slider } from "./ui/slider";
 import { Switch } from "./ui/switch";
-import { Copy, Link, Settings, ShieldAlert, TerminalSquare } from 'lucide-react';
-import { ScrollArea } from './ui/scroll-area';
+import { Copy, Link, Settings, ShieldAlert, TerminalSquare, X } from 'lucide-react';
 
 interface ModalsProps {
   conf: ReturnType<typeof useConference>;
@@ -29,14 +20,62 @@ interface ModalsProps {
   setIsAuditOpen: (v: boolean) => void;
 }
 
+function StudioModal({
+  open,
+  onClose,
+  title,
+  icon,
+  wide,
+  children,
+  headerExtra
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  icon?: React.ReactNode;
+  wide?: boolean;
+  children: React.ReactNode;
+  headerExtra?: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="p2p-modal-backdrop centered-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`studio-modal ${wide ? 'modal-large' : ''}`} role="dialog" aria-modal="true">
+        <div className="modal-header">
+          <div className="modal-title">
+            {icon}
+            <span>{title}</span>
+          </div>
+          <div className="modal-header-actions">
+            {headerExtra}
+            <button type="button" className="tile-action-btn" onClick={onClose} aria-label="Закрыть">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, setIsInviteOpen, isAuditOpen, setIsAuditOpen }: ModalsProps) {
   const logs = useAuditLogs();
-  
+  const [tab, setTab] = useState<'devices' | 'ui' | 'admin'>('devices');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedVideo, setSelectedVideo] = useState<string>('');
-  const [selectedAudio, setSelectedAudio] = useState<string>('');
+  const [selectedVideo, setSelectedVideo] = useState('');
+  const [selectedAudio, setSelectedAudio] = useState('');
 
   useEffect(() => {
+    if (!isSettingsOpen) return;
     navigator.mediaDevices.enumerateDevices().then(d => {
       setDevices(d);
       const v = d.find(x => x.kind === 'videoinput');
@@ -44,33 +83,35 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
       if (v) setSelectedVideo(v.deviceId);
       if (a) setSelectedAudio(a.deviceId);
     });
-  }, []);
+  }, [isSettingsOpen]);
 
   const copyLogs = () => {
     navigator.clipboard.writeText(P2PAuditLog.exportText());
     toast.success("Логи скопированы");
   };
 
-  const clearLogs = () => {
-    P2PAuditLog.clear();
-  };
+  const inviteUrl = conf.roomId
+    ? `${window.location.href.split('#')[0]}#${conf.roomId}`
+    : net.getShareUrl();
 
   const copyInvite = () => {
-    const url = conf.roomId ? `${window.location.href.split('#')[0]}#${conf.roomId}` : net.getShareUrl();
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(inviteUrl);
     toast.success("Ссылка скопирована");
   };
 
   const handleDeviceChange = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: selectedVideo ? { exact: selectedVideo } : undefined },
-        audio: { deviceId: selectedAudio ? { exact: selectedAudio } : undefined }
+        video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
+        audio: selectedAudio ? { deviceId: { exact: selectedAudio } } : true
       });
-      conf.setLocalStream(stream);
-      net.localStream = stream;
+      // остановить старые треки
+      conf.localStream?.getTracks().forEach(t => t.stop());
+      conf.syncStream(stream);
       if (stream.getVideoTracks()[0]) await net.replaceTrack(stream.getVideoTracks()[0], 'video');
       if (stream.getAudioTracks()[0]) await net.replaceTrack(stream.getAudioTracks()[0], 'audio');
+      conf.setIsCamOn(!!stream.getVideoTracks()[0]);
+      conf.setIsMicOn(!!stream.getAudioTracks()[0]);
       toast.success("Настройки применены");
     } catch (e) {
       toast.error("Ошибка смены оборудования");
@@ -79,91 +120,88 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
 
   return (
     <>
-      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="settings-dialog-content sm:max-w-[500px] bg-[var(--bg-surface)] text-foreground border-[var(--border-subtle)] p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
-          <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
-            <DialogTitle className="flex items-center gap-2"><Settings size={18} /> Настройки</DialogTitle>
-          </DialogHeader>
-          <Tabs defaultValue="devices" className="w-full flex flex-col min-h-0 flex-1 overflow-hidden">
-            <div className="settings-tabs-scroll shrink-0">
-              <TabsList className="w-full bg-transparent justify-start rounded-none h-auto p-0 px-3">
-                <TabsTrigger value="devices" className="settings-tab-trigger">Оборудование</TabsTrigger>
-                <TabsTrigger value="ui" className="settings-tab-trigger">UI & Звук</TabsTrigger>
-                <TabsTrigger value="admin" className="settings-tab-trigger">Админ</TabsTrigger>
-              </TabsList>
-            </div>
-            
-            <div className="settings-body flex-1 overflow-y-auto min-h-0">
-            <TabsContent value="devices" className="space-y-4 mt-0">
-              <div className="space-y-2">
+      <StudioModal
+        open={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        title="Настройки"
+        icon={<Settings size={18} />}
+      >
+        <div className="settings-tabs-scroll">
+          <div className="settings-tabs">
+            <button type="button" className={`settings-tab-btn ${tab === 'devices' ? 'active' : ''}`} onClick={() => setTab('devices')}>Оборудование</button>
+            <button type="button" className={`settings-tab-btn ${tab === 'ui' ? 'active' : ''}`} onClick={() => setTab('ui')}>Интерфейс & Звук</button>
+            <button type="button" className={`settings-tab-btn ${tab === 'admin' ? 'active' : ''}`} onClick={() => setTab('admin')}>Админ</button>
+          </div>
+        </div>
+
+        <div className="settings-body">
+          {tab === 'devices' && (
+            <div className="settings-stack">
+              <div className="settings-form-group">
                 <label className="studio-label">Камера</label>
-                <select 
-                  className="studio-select" 
-                  value={selectedVideo} 
-                  onChange={e => setSelectedVideo(e.target.value)}
-                >
+                <select className="studio-select" value={selectedVideo} onChange={e => setSelectedVideo(e.target.value)}>
                   {devices.filter(d => d.kind === 'videoinput').map(d => (
                     <option key={d.deviceId} value={d.deviceId}>{d.label || 'Камера'}</option>
                   ))}
                 </select>
               </div>
-              <div className="space-y-2">
+              <div className="settings-form-group">
                 <label className="studio-label">Микрофон</label>
-                <select 
-                  className="studio-select" 
-                  value={selectedAudio} 
-                  onChange={e => setSelectedAudio(e.target.value)}
-                >
+                <select className="studio-select" value={selectedAudio} onChange={e => setSelectedAudio(e.target.value)}>
                   {devices.filter(d => d.kind === 'audioinput').map(d => (
                     <option key={d.deviceId} value={d.deviceId}>{d.label || 'Микрофон'}</option>
                   ))}
                 </select>
               </div>
-              <div className="flex items-center gap-2">
+              <label className="settings-switch-row">
                 <Switch checked={conf.isMirrored} onCheckedChange={conf.setIsMirrored} />
-                <span className="text-sm">Зеркалировать собственную камеру</span>
-              </div>
-              <Button onClick={handleDeviceChange} className="w-full studio-btn-primary mt-2 text-black">Применить</Button>
-            </TabsContent>
+                <span>Зеркалировать собственную камеру</span>
+              </label>
+              <button type="button" className="studio-btn-primary w-full" onClick={handleDeviceChange}>Применить</button>
+            </div>
+          )}
 
-            <TabsContent value="ui" className="space-y-4 mt-0">
-              <div className="flex items-center gap-2">
+          {tab === 'ui' && (
+            <div className="settings-stack">
+              <label className="settings-switch-row">
                 <Switch checked={conf.soundEnabled} onCheckedChange={conf.setSoundEnabled} />
-                <span className="text-sm">Звуковые эффекты</span>
-              </div>
-              <div className="flex items-center gap-2">
+                <span>Звуковые эффекты</span>
+              </label>
+              <label className="settings-switch-row">
                 <Switch checked={conf.showChatToasts} onCheckedChange={conf.setShowChatToasts} />
-                <span className="text-sm">Всплывающие сообщения поверх видео</span>
-              </div>
-              <div className="space-y-2 pt-2">
-                <label className="studio-label">Громкость звуков ({Math.round(conf.soundVolume*100)}%)</label>
+                <span>Всплывающие сообщения поверх видео</span>
+              </label>
+              <div className="settings-form-group">
+                <label className="studio-label">Громкость звуков ({Math.round(conf.soundVolume * 100)}%)</label>
                 <Slider min={0} max={1} step={0.05} value={[conf.soundVolume]} onValueChange={v => conf.setSoundVolume(v[0])} />
               </div>
-            </TabsContent>
+            </div>
+          )}
 
-            <TabsContent value="admin" className="space-y-4 mt-0">
+          {tab === 'admin' && (
+            <div className="settings-stack">
               <div className="admin-status-box">
                 <ShieldAlert size={16} />
                 {conf.isAdmin ? 'Вы являетесь администратором комнаты' : `Участник (Хост: ${conf.hostName || 'Host'})`}
               </div>
-              <div className={`space-y-4 ${conf.isAdmin ? '' : 'opacity-50 pointer-events-none'}`}>
-                <div className="flex items-center gap-2">
+              <div className={conf.isAdmin ? '' : 'opacity-50 pointer-events-none'}>
+                <label className="settings-switch-row">
                   <Switch checked={conf.isLocked} onCheckedChange={v => { conf.setIsLocked(v); net.setRoomLocked(v); }} />
-                  <span className="text-sm">Заблокировать комнату для новых участников</span>
-                </div>
-                <div className="flex items-center gap-2">
+                  <span>Заблокировать комнату</span>
+                </label>
+                <label className="settings-switch-row">
                   <Switch checked={conf.allowScreenShare} onCheckedChange={v => { conf.setAllowScreenShare(v); net.setScreenShareAllowed(v); }} />
-                  <span className="text-sm">Разрешить участникам демонстрацию экрана</span>
-                </div>
-                <div className="pt-2">
+                  <span>Разрешить демонстрацию экрана</span>
+                </label>
+                <div className="settings-form-group mt-3">
                   <label className="studio-label">Участники ({Object.keys(conf.peers).length + 1})</label>
-                  <ScrollArea className="h-32 rounded border border-border p-2 mt-2">
-                    <div className="participant-row mb-1">
-                      <span><strong>{conf.myName}</strong> (Вы {conf.isAdmin ? '👑' : ''})</span>
+                  <div className="participants-list">
+                    <div className="participant-row">
+                      <span><strong>{conf.myName}</strong> (Вы{conf.isAdmin ? ' · хост' : ''})</span>
                     </div>
                     {Object.values(conf.peers).map(p => (
-                      <div key={p.id} className="participant-row mb-1">
-                        <span>{p.name} {conf.hostId === p.id ? '👑' : ''}</span>
+                      <div key={p.id} className="participant-row">
+                        <span>{p.name}{conf.hostId === p.id ? ' · хост' : ''}</span>
                         {conf.isAdmin && (
                           <Button variant="destructive" size="sm" className="h-6 text-[10px]" onClick={() => {
                             if (confirm("Исключить?")) net.kickPeer(p.id);
@@ -171,62 +209,58 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
                         )}
                       </div>
                     ))}
-                  </ScrollArea>
+                  </div>
                 </div>
               </div>
-            </TabsContent>
             </div>
-          </Tabs>
-        </DialogContent>
-      </Dialog>
+          )}
+        </div>
+      </StudioModal>
 
-      <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-        <DialogContent className="sm:max-w-[400px] bg-background text-foreground border-border text-center">
-          <DialogHeader>
-            <DialogTitle>Пригласить участников</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col items-center gap-4 py-4">
-            <div className="text-xs text-muted-foreground font-mono">КОД ВСТРЕЧИ</div>
-            <div className="text-2xl font-mono font-bold text-blue-400 tracking-widest">{conf.roomId}</div>
-            <div className="p-2 bg-white rounded-md">
-              <QRCodeSVG
-                value={conf.roomId ? `${window.location.href.split('#')[0]}#${conf.roomId}` : net.getShareUrl()}
-                size={140}
-                fgColor="#131314"
-              />
-            </div>
-            <Button onClick={copyInvite} className="w-full studio-btn-primary text-black">
-              <Link size={16} className="mr-2" /> Скопировать ссылку
-            </Button>
+      <StudioModal
+        open={isInviteOpen}
+        onClose={() => setIsInviteOpen(false)}
+        title="Пригласить участников"
+      >
+        <div className="invite-body">
+          <div className="invite-code-label">КОД ВСТРЕЧИ</div>
+          <div className="invite-code">{conf.roomId}</div>
+          <div className="invite-qr-wrap">
+            <QRCodeSVG value={inviteUrl} size={148} fgColor="#131314" />
           </div>
-        </DialogContent>
-      </Dialog>
+          <button type="button" className="studio-btn-primary w-full" onClick={copyInvite}>
+            <Link size={16} /> Скопировать ссылку
+          </button>
+        </div>
+      </StudioModal>
 
-      <Dialog open={isAuditOpen} onOpenChange={setIsAuditOpen}>
-        <DialogContent className="sm:max-w-[800px] h-[80vh] flex flex-col bg-background text-foreground border-border">
-          <DialogHeader className="flex flex-row justify-between items-center pr-8">
-            <DialogTitle className="flex items-center gap-2 text-yellow-400">
-              <TerminalSquare size={18} /> Системный аудит
-            </DialogTitle>
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={copyLogs}><Copy size={14} className="mr-2" /> Копировать</Button>
-              <Button variant="secondary" size="sm" onClick={clearLogs}>Очистить</Button>
+      <StudioModal
+        open={isAuditOpen}
+        onClose={() => setIsAuditOpen(false)}
+        title="Системный аудит"
+        icon={<TerminalSquare size={18} className="text-yellow-400" />}
+        wide
+        headerExtra={
+          <>
+            <button type="button" className="studio-btn-compact" onClick={copyLogs}><Copy size={14} /> Копировать</button>
+            <button type="button" className="studio-btn-compact" onClick={() => P2PAuditLog.clear()}>Очистить</button>
+          </>
+        }
+      >
+        <div className="log-terminal-window">
+          {logs.length === 0 && <div className="log-line text-muted-foreground">Логов пока нет</div>}
+          {logs.map((log, i) => (
+            <div key={i} className="log-line">
+              <span className="log-time">[{log.time}]</span>
+              <span className={`log-tag log-tag-${log.category}`}>{log.category}</span>
+              <span>
+                {log.message}{' '}
+                {log.extra && <span className="text-gray-400">{log.extra}</span>}
+              </span>
             </div>
-          </DialogHeader>
-          <ScrollArea className="log-terminal-window flex-1">
-            {logs.map((log, i) => (
-              <div key={i} className="log-line">
-                <span className="log-time">[{log.time}]</span>
-                <span className={`log-tag log-tag-${log.category}`}>{log.category}</span>
-                <span>
-                  {log.message}{' '}
-                  {log.extra && <span className="text-gray-400">{log.extra}</span>}
-                </span>
-              </div>
-            ))}
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
+          ))}
+        </div>
+      </StudioModal>
     </>
   );
 }

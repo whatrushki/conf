@@ -19,6 +19,8 @@ export class P2PNet {
   mode: string;
   iceServers: any[];
 
+  peerServerIndex: number = 0;
+
   peer: Peer | null = null;
   roomId: string | null = null;
   isHost: boolean = false;
@@ -47,6 +49,34 @@ export class P2PNet {
     this.appPrefix = options.appPrefix || 'dropconf';
     this.mode = options.mode || 'mesh';
     this.iceServers = options.iceServers || P2PNet.DEFAULT_ICE_SERVERS;
+    this.peerServerIndex = 0;
+  }
+
+  static PEER_SERVERS: Array<{ host: string; port: number; path: string; secure: boolean }> = (() => {
+    const customHost = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PEER_HOST) || '';
+    const list: Array<{ host: string; port: number; path: string; secure: boolean }> = [];
+    if (customHost) {
+      list.push({
+        host: customHost,
+        port: Number((import.meta as any).env?.VITE_PEER_PORT || 443),
+        path: (import.meta as any).env?.VITE_PEER_PATH || '/',
+        secure: String((import.meta as any).env?.VITE_PEER_SECURE ?? 'true') !== 'false'
+      });
+    }
+    // Публичный cloud PeerJS часто падает (server-error / network) — оставляем как fallback
+    list.push({ host: '0.peerjs.com', port: 443, path: '/', secure: true });
+    return list;
+  })();
+
+  _peerServerOpts() {
+    const s = P2PNet.PEER_SERVERS[this.peerServerIndex % P2PNet.PEER_SERVERS.length];
+    return {
+      host: s.host,
+      port: s.port,
+      path: s.path,
+      secure: s.secure,
+      pingInterval: 5000,
+    };
   }
 
   on(event: string, handler: Function) {
@@ -85,18 +115,20 @@ export class P2PNet {
     return str.trim().toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1');
   }
 
-  async createRoom(customCode: string | null = null, myName = 'Host', isMicOn = true, isCamOn = true, maxRetries = 3) {
+  async createRoom(customCode: string | null = null, myName = 'Host', isMicOn = true, isCamOn = true, maxRetries = 5) {
     this.isHost = true;
     this.userName = myName;
     this.initialMicState = isMicOn;
     this.initialCamState = isCamOn;
     let attempts = 0;
+    let lastErr: any = null;
 
     while (attempts < maxRetries) {
       attempts++;
       const code = customCode || P2PNet.generateCode();
       const fullPeerId = `${this.appPrefix}-${code}`;
-      this._audit('SYS', `Создание комнаты (ID: ${fullPeerId}, попытка ${attempts})...`);
+      const server = P2PNet.PEER_SERVERS[this.peerServerIndex % P2PNet.PEER_SERVERS.length];
+      this._audit('SYS', `Создание комнаты (ID: ${fullPeerId}, попытка ${attempts}, signal: ${server.host})...`);
 
       try {
         await this._initPeer(fullPeerId);
@@ -109,12 +141,21 @@ export class P2PNet {
         this.emit('room-created', { roomId: this.roomId, isHost: true });
         return this.roomId;
       } catch (err: any) {
-        this._audit('WARN', `ID ${fullPeerId} занят или недоступен:`, err.type || err.message);
-        if (err.type === 'unavailable-id' && !customCode) continue;
+        lastErr = err;
+        const errType = err?.type || err?.message || 'unknown';
+        this._audit('WARN', `Не удалось открыть peer (${errType})`, server.host);
+        // network / server-error — пробуем снова (и другой signal-сервер если есть)
+        if (errType === 'unavailable-id' && customCode) throw err;
+        if (errType === 'network' || errType === 'server-error' || errType === 'socket-error') {
+          this.peerServerIndex++;
+          await new Promise(r => setTimeout(r, 400 + attempts * 300));
+          continue;
+        }
+        if (errType === 'unavailable-id' && !customCode) continue;
         throw err;
       }
     }
-    throw new Error("Не удалось создать комнату.");
+    throw lastErr || new Error("Не удалось создать комнату. Сигнальный сервер PeerJS недоступен — попробуйте позже или задайте VITE_PEER_HOST.");
   }
 
   async joinRoom(code: string, myData: any = {}) {
@@ -125,39 +166,55 @@ export class P2PNet {
     this.initialCamState = myData.isCamOn ?? true;
     const hostPeerId = `${this.appPrefix}-${cleaned}`;
 
-    this._audit('NET', `Подключение к сессии: ${hostPeerId}`);
-    await this._initPeer();
-    // roomId после _initPeer: destroy() внутри init обнуляет его
-    this.roomId = cleaned;
-    this._startHeartbeat();
-    this._startWatchdog();
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const server = P2PNet.PEER_SERVERS[this.peerServerIndex % P2PNet.PEER_SERVERS.length];
+      this._audit('NET', `Подключение к сессии: ${hostPeerId} (попытка ${attempt}, signal: ${server.host})`);
+      try {
+        await this._initPeer();
+        this.roomId = cleaned;
+        this._startHeartbeat();
+        this._startWatchdog();
 
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this._audit('ERR', `Таймаут подключения к комнате ${this.roomId}`);
-        reject(new Error("Таймаут подключения. Проверьте код комнаты."));
-      }, 14000);
+        return await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            this._audit('ERR', `Таймаут подключения к комнате ${this.roomId}`);
+            reject(new Error("Таймаут подключения. Проверьте код комнаты."));
+          }, 14000);
 
-      this._connectToPeer(hostPeerId, {
-        onOpen: (conn: any) => {
-          clearTimeout(timer);
-          this._audit('NET', `DataChannel с хостом установлен. Отправка JOIN_REQ`);
-          conn.send({
-            __sys: 'JOIN_REQ',
-            peerId: this.peer!.id,
-            name: this.userName,
-            isMicOn: this.initialMicState,
-            isCamOn: this.initialCamState,
-            ...myData
+          this._connectToPeer(hostPeerId, {
+            onOpen: (conn: any) => {
+              clearTimeout(timer);
+              this._audit('NET', `DataChannel с хостом установлен. Отправка JOIN_REQ`);
+              conn.send({
+                __sys: 'JOIN_REQ',
+                peerId: this.peer!.id,
+                name: this.userName,
+                isMicOn: this.initialMicState,
+                isCamOn: this.initialCamState,
+                ...myData
+              });
+              resolve(conn);
+            },
+            onError: (err: any) => {
+              clearTimeout(timer);
+              reject(err);
+            }
           });
-          resolve(conn);
-        },
-        onError: (err: any) => {
-          clearTimeout(timer);
-          reject(err);
+        });
+      } catch (err: any) {
+        lastErr = err;
+        const errType = err?.type || err?.message || 'unknown';
+        this._audit('WARN', `Join peer failed (${errType})`);
+        if (errType === 'network' || errType === 'server-error' || errType === 'socket-error') {
+          this.peerServerIndex++;
+          await new Promise(r => setTimeout(r, 400 + attempt * 300));
+          continue;
         }
-      });
-    });
+        throw err;
+      }
+    }
+    throw lastErr || new Error("Не удалось подключиться. Сигнальный сервер PeerJS недоступен.");
   }
 
   _initPeer(fixedId: string | null = null) {
@@ -167,8 +224,12 @@ export class P2PNet {
       this.isDestroyed = false;
       this.roomId = savedRoomId;
 
+      const serverOpts = this._peerServerOpts();
+      this._audit('SYS', `Подключение к PeerJS signal: ${serverOpts.host}`);
+
       const config = {
         debug: 0,
+        ...serverOpts,
         config: {
           iceServers: this.iceServers,
           iceTransportPolicy: 'all' as any
@@ -629,21 +690,44 @@ export class P2PNet {
 
   async replaceTrack(newTrack: MediaStreamTrack | null, kind = 'video') {
     this._audit('MEDIA', `Замена трека [${kind}] на всех пирах...`);
-    const promises: any[] = [];
+    const promises: Promise<any>[] = [];
+
+    const findSender = (pc: RTCPeerConnection) => {
+      const senders = pc.getSenders();
+      let target = senders.find((s) => s.track?.kind === kind);
+      if (target) return target;
+
+      if (pc.getTransceivers) {
+        const trans = pc.getTransceivers().find((t) => {
+          if (t.sender?.track?.kind === kind) return true;
+          if (t.receiver?.track?.kind === kind) return true;
+          // после replaceTrack(null) track у sender пустой — ищем по receiver / direction
+          if (t.sender && !t.sender.track) {
+            const dir = t.direction;
+            if ((dir === 'sendrecv' || dir === 'sendonly') && t.receiver?.track?.kind === kind) return true;
+            if ((dir === 'sendrecv' || dir === 'sendonly') && !t.receiver?.track) {
+              // эвристика: audio обычно первый transceiver
+              const all = pc.getTransceivers().filter(x =>
+                x.direction === 'sendrecv' || x.direction === 'sendonly'
+              );
+              const idx = all.indexOf(t);
+              if (kind === 'audio' && idx === 0) return true;
+              if (kind === 'video' && (idx === 1 || (idx === 0 && all.length === 1))) return true;
+            }
+          }
+          return false;
+        });
+        if (trans?.sender) return trans.sender;
+      }
+
+      // последний шанс: любой sender без track
+      return senders.find((s) => !s.track) || null;
+    };
 
     this.peers.forEach((peerRecord, peerId) => {
       if (peerRecord.call && peerRecord.call.peerConnection) {
-        const pc = peerRecord.call.peerConnection;
-        const senders = pc.getSenders();
-        let targetSender = senders.find((s: any) => s.track && s.track.kind === kind);
-
-        if (!targetSender && pc.getTransceivers) {
-          const trans = pc.getTransceivers().find((t: any) =>
-            (t.sender && t.sender.track && t.sender.track.kind === kind) ||
-            (t.receiver && t.receiver.track && t.receiver.track.kind === kind)
-          );
-          if (trans && trans.sender) targetSender = trans.sender;
-        }
+        const pc = peerRecord.call.peerConnection as RTCPeerConnection;
+        const targetSender = findSender(pc);
 
         if (targetSender) {
           promises.push(
@@ -652,7 +736,12 @@ export class P2PNet {
             })
           );
         } else if (newTrack && this.localStream) {
-          try { pc.addTrack(newTrack, this.localStream); } catch (e) { }
+          try {
+            pc.addTrack(newTrack, this.localStream);
+            this._audit('MEDIA', `addTrack [${kind}] для ${peerId} (sender не найден)`);
+          } catch (e: any) {
+            this._audit('ERR', `addTrack у ${peerId}: ${e.message}`);
+          }
         }
       }
     });

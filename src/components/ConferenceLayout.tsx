@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useConference } from '../hooks/useConference';
 import { VideoTile, ScreenTile } from './VideoTile';
 import { SidebarChat } from './SidebarChat';
@@ -7,11 +7,36 @@ import { net } from '../lib/p2p-net';
 import { toast } from 'sonner';
 import { X, Hand, MonitorUp, SwitchCamera, TerminalSquare, MessageSquare, UserPlus, Settings } from 'lucide-react';
 
+type ChatToast = { id: number; sender: string; text: string };
+
 export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConference> }) {
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [chatToasts, setChatToasts] = useState<ChatToast[]>([]);
+  const msgLenRef = useRef(0);
+  const chatOpenRef = useRef(false);
+  chatOpenRef.current = isChatOpen;
+
+  useEffect(() => {
+    const len = conf.messages.length;
+    if (len > msgLenRef.current) {
+      const newest = conf.messages.slice(msgLenRef.current);
+      newest.forEach(msg => {
+        if (msg.isMe) return;
+        if (chatOpenRef.current) return;
+        if (!conf.showChatToasts) return;
+        const id = Date.now() + Math.random();
+        setChatToasts(prev => [...prev.slice(-4), { id, sender: msg.sender, text: msg.text }]);
+        toast.message(msg.sender, { description: msg.text, duration: 4000 });
+        setTimeout(() => {
+          setChatToasts(prev => prev.filter(t => t.id !== id));
+        }, 5000);
+      });
+    }
+    msgLenRef.current = len;
+  }, [conf.messages, conf.showChatToasts]);
 
   const togglePin = (id: string) => {
     setPinnedId(prev => (prev === id ? null : id));
@@ -29,7 +54,6 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
   const handleReaction = (emoji: string) => {
     conf.spawnReaction(emoji);
     net.broadcast({ type: 'REACTION', emoji });
-    // панель остаётся открытой — закрытие только по повторному клику
   };
 
   const gridCount =
@@ -45,6 +69,8 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
     gridClass = 'count-1';
   } else if (gridCount === 2) {
     gridClass = 'count-2';
+  } else if (gridCount === 3) {
+    gridClass = 'count-3';
   } else if (gridCount <= 4) {
     gridClass = 'count-4';
   }
@@ -155,6 +181,15 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
               />
             ))}
           </div>
+
+          <div className="chat-toast-container">
+            {chatToasts.map(t => (
+              <div key={t.id} className="chat-overlay-bubble" onClick={handleToggleChat}>
+                <div className="chat-toast-author">{t.sender}</div>
+                <div className="chat-toast-text">{t.text}</div>
+              </div>
+            ))}
+          </div>
           
           {showReactions && (
             <div className="reactions-popover">
@@ -200,43 +235,30 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
         <div className="p2p-modal-backdrop sheet-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setMobileSheetOpen(false); }}>
           <div className="meet-bottom-sheet" onClick={e => e.stopPropagation()}>
             <div className="sheet-drag-handle" />
-
             <div className="sheet-grid-actions">
-              <button
-                type="button"
-                className={`sheet-tile-btn ${conf.isHandRaised ? 'active' : ''}`}
-                onClick={() => { toggleHand(); setMobileSheetOpen(false); }}
-              >
-                <Hand size={22} />
-                <span>Поднять руку</span>
+              <button type="button" className={`sheet-tile-btn ${conf.isHandRaised ? 'active' : ''}`} onClick={() => { toggleHand(); setMobileSheetOpen(false); }}>
+                <Hand size={22} /><span>Поднять руку</span>
               </button>
               <button type="button" className={`sheet-tile-btn ${conf.isScreenSharing ? 'active' : ''}`} onClick={toggleScreen}>
-                <MonitorUp size={22} />
-                <span>Экран</span>
+                <MonitorUp size={22} /><span>Экран</span>
               </button>
               <button type="button" className="sheet-tile-btn" onClick={() => { conf.flipCamera(); setMobileSheetOpen(false); }}>
-                <SwitchCamera size={22} />
-                <span>Сменить камеру</span>
+                <SwitchCamera size={22} /><span>Сменить камеру</span>
               </button>
               <button type="button" className="sheet-tile-btn" onClick={() => { window.dispatchEvent(new Event('openAudit')); setMobileSheetOpen(false); }}>
-                <TerminalSquare size={22} className="text-yellow-400" />
-                <span>Аудит</span>
+                <TerminalSquare size={22} className="text-yellow-400" /><span>Аудит</span>
               </button>
             </div>
-
             <div className="sheet-list-actions">
               <button type="button" className="sheet-list-item" onClick={handleToggleChat}>
-                <MessageSquare size={20} />
-                <span>Сообщения встречи</span>
+                <MessageSquare size={20} /><span>Сообщения встречи</span>
                 {conf.unreadCount > 0 && <span className="sheet-badge">New</span>}
               </button>
               <button type="button" className="sheet-list-item" onClick={() => { window.dispatchEvent(new Event('openInvite')); setMobileSheetOpen(false); }}>
-                <UserPlus size={20} />
-                <span>Пригласить участников</span>
+                <UserPlus size={20} /><span>Пригласить участников</span>
               </button>
               <button type="button" className="sheet-list-item" onClick={() => { window.dispatchEvent(new Event('openSettings')); setMobileSheetOpen(false); }}>
-                <Settings size={20} />
-                <span>Настройки</span>
+                <Settings size={20} /><span>Настройки</span>
               </button>
             </div>
           </div>

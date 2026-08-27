@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "WHAT CONF",
+    "slug": "what-conf",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#09090b"
+    },
+    "android": {
+      "package": "app.whatconf.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#09090b"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "app.whatconf.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Нужна камера для видеозвонков",
+        "NSMicrophoneUsageDescription": "Нужен микрофон для голосовой связи"
+      }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "webAppUrl": "https://YOUR_GITHUB_PAGES_URL"
+    }
+  }
+}

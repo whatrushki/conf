@@ -57,9 +57,9 @@ export default function App() {
             <span className="status-dot"></span>
             <span>{conf.reconnecting ? 'RECONNECTING' : (conf.online ? (conf.roomId ? `ROOM: ${conf.roomId}` : 'ONLINE') : 'STANDBY')}</span>
           </div>
-          <button className="studio-btn-compact hide-mobile" onClick={() => setIsAuditOpen(true)} title="Системный аудит">
+          <button className="studio-btn-compact" onClick={() => setIsAuditOpen(true)} title="Системный аудит">
             <TerminalSquare size={14} className="text-yellow-400" />
-            <span>Audit</span>
+            <span className="hide-mobile">Audit</span>
           </button>
           <button className="studio-btn-compact hide-mobile" onClick={() => setIsSettingsOpen(true)} title="Настройки">
             <Settings size={14} />

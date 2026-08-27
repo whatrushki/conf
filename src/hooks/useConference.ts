@@ -32,7 +32,7 @@ export type Reaction = {
   left: string;
 };
 
-async function getMedia(opts: { video?: boolean | MediaTrackConstraints; audio?: boolean | MediaTrackConstraints }) {
+async function getMedia(opts: MediaStreamConstraints) {
   return navigator.mediaDevices.getUserMedia(opts);
 }
 
@@ -103,10 +103,28 @@ export function useConference() {
     if (!stream) return;
     const tracks = kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
     tracks.forEach(t => {
-      stream.removeTrack(t);
-      t.stop();
+      try { stream.removeTrack(t); } catch { /* */ }
+      try { t.stop(); } catch { /* */ }
     });
+    // на всякий случай гасим «осиротевшие» треки того же kind на net.localStream
+    const netStream = net.localStream;
+    if (netStream && netStream !== stream) {
+      const extra = kind === 'audio' ? netStream.getAudioTracks() : netStream.getVideoTracks();
+      extra.forEach(t => {
+        try { netStream.removeTrack(t); } catch { /* */ }
+        try { t.stop(); } catch { /* */ }
+      });
+    }
   }, []);
+
+  const rebuildStream = useCallback((base: MediaStream | null) => {
+    const next = new MediaStream();
+    (base?.getTracks() || []).forEach(t => {
+      if (t.readyState === 'live') next.addTrack(t);
+    });
+    syncStream(next.getTracks().length ? next : null);
+    return next.getTracks().length ? next : null;
+  }, [syncStream]);
 
   const toggleMic = useCallback(async () => {
     soundFx.click();
@@ -118,16 +136,22 @@ export function useConference() {
       await net.replaceTrack(null, 'audio');
       net.broadcast({ type: 'MIC_STATUS', isMicOn: false });
       setIsMicOn(false);
-      if (stream) syncStream(stream);
+      rebuildStream(stream);
       return;
     }
 
     try {
       const fresh = await getMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
       });
       const track = fresh.getAudioTracks()[0];
-      const next = stream || new MediaStream();
+      // остановить лишние треки из fresh
+      fresh.getVideoTracks().forEach(t => t.stop());
+      const next = stream && stream.getTracks().some(t => t.readyState === 'live')
+        ? stream
+        : new MediaStream();
+      next.getAudioTracks().forEach(t => { next.removeTrack(t); t.stop(); });
       next.addTrack(track);
       syncStream(next);
       await net.replaceTrack(track, 'audio');
@@ -138,7 +162,7 @@ export function useConference() {
       console.error(e);
       alert('Не удалось включить микрофон');
     }
-  }, [localStream, stopTracksOfKind, syncStream]);
+  }, [localStream, stopTracksOfKind, syncStream, rebuildStream]);
 
   const toggleCam = useCallback(async () => {
     soundFx.click();
@@ -149,7 +173,7 @@ export function useConference() {
       await net.replaceTrack(null, 'video');
       net.broadcast({ type: 'CAM_STATUS', isCamOn: false });
       setIsCamOn(false);
-      if (stream) syncStream(stream);
+      rebuildStream(stream);
       return;
     }
 
@@ -159,10 +183,15 @@ export function useConference() {
           facingMode: { ideal: facingRef.current },
           width: { ideal: 1280 },
           height: { ideal: 720 }
-        }
+        },
+        audio: false
       });
       const track = fresh.getVideoTracks()[0];
-      const next = stream || new MediaStream();
+      fresh.getAudioTracks().forEach(t => t.stop());
+      const next = stream && stream.getTracks().some(t => t.readyState === 'live')
+        ? stream
+        : new MediaStream();
+      next.getVideoTracks().forEach(t => { next.removeTrack(t); t.stop(); });
       next.addTrack(track);
       syncStream(next);
       await net.replaceTrack(track, 'video');
@@ -172,7 +201,7 @@ export function useConference() {
       console.error(e);
       alert('Не удалось включить камеру');
     }
-  }, [localStream, stopTracksOfKind, syncStream]);
+  }, [localStream, stopTracksOfKind, syncStream, rebuildStream]);
 
   const flipCamera = useCallback(async () => {
     soundFx.click();
