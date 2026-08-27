@@ -366,6 +366,7 @@
     display: flex;
     flex-direction: column;
     padding: 8px;
+    padding-bottom: 78px; /* место под нижнюю панель — окна не уезжают под неё */
     min-height: 0;
     min-width: 0;
     position: relative;
@@ -373,7 +374,11 @@
     transition: flex 0.25s ease;
 }
 
-/* ДЕСКТОПНАЯ СЕТКА */
+.conference-container.bar-collapsed .conf-video-container {
+    padding-bottom: 36px;
+}
+
+/* Сетка: ровно в контейнер, без скролла */
 .conf-grid {
     flex: 1;
     display: grid;
@@ -381,91 +386,54 @@
     width: 100%;
     height: 100%;
     min-height: 0;
-    overflow-y: auto;
+    min-width: 0;
+    overflow: hidden;
     align-content: stretch;
+    justify-content: stretch;
 }
 
-.conf-grid.count-1 {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
-}
-
-.conf-grid.count-2 {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr;
-}
-
-.conf-grid.count-3,
-.conf-grid.count-4 {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-}
-
-/* Нечётное число: последнее окно на всю ширину ряда */
-.conf-grid.count-3 .video-tile:last-child {
+.conf-grid.stretch-last > .video-tile:last-child {
     grid-column: 1 / -1;
 }
 
-.conf-grid.count-many {
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    grid-auto-rows: 1fr;
+.conf-grid.has-stage {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
 }
 
-/* ==========================================================================
-   МОБИЛЬНАЯ АДАПТАЦИЯ СЕТКИ (СТРОГО СВЕРХУ И СНИЗУ ДЛЯ 2 УЧАСТНИКОВ)
-   ========================================================================== */
+.conf-grid.has-stage .video-tile.is-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+}
+
+.conf-grid.has-stage .video-tile:not(.is-stage) {
+    flex: 0 0 96px;
+    height: 96px;
+    max-width: 160px;
+    width: auto;
+}
+
 @media (max-width: 768px) {
     .conf-video-container {
         padding: 4px;
-        padding-bottom: 74px;
+        padding-bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+        gap: 0;
     }
-    .conf-grid.count-1 {
-        grid-template-columns: 1fr !important;
-        grid-template-rows: 1fr !important;
+
+    .conference-container.bar-collapsed .conf-video-container {
+        padding-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
     }
-    .conf-grid.count-2 {
-        grid-template-columns: 1fr !important;
-        grid-template-rows: 1fr 1fr !important;
-        gap: 6px !important;
+
+    .conf-grid {
+        gap: 4px;
     }
-    .conf-grid.count-3 {
-        grid-template-columns: 1fr 1fr !important;
-        grid-template-rows: 1fr 1fr !important;
-        gap: 4px !important;
-    }
-    /* на мобиле одно большое сверху, два снизу — как в оригинале */
-    .conf-grid.count-3 .video-tile:first-child {
-        grid-column: span 2 !important;
-    }
-    .conf-grid.count-many .video-tile:last-child:nth-child(odd) {
-        grid-column: span 2 !important;
-    }
-    .conf-grid.count-4 {
-        grid-template-columns: 1fr 1fr !important;
-        grid-template-rows: 1fr 1fr !important;
-        gap: 4px !important;
-    }
-    .conf-grid.count-many {
-        grid-template-columns: 1fr 1fr !important;
-        grid-auto-rows: 1fr !important;
-        gap: 4px !important;
-    }
-    .conf-grid.has-stage {
-        display: flex !important;
-        flex-direction: column !important;
-        gap: 6px !important;
-    }
-    .conf-grid.has-stage .video-tile.is-stage {
-        flex: 1 1 auto !important;
-        width: 100% !important;
-        height: auto !important;
-        min-height: 0 !important;
-    }
+
     .conf-grid.has-stage .video-tile:not(.is-stage) {
-        flex: 0 0 90px !important;
-        height: 90px !important;
-        max-width: 130px !important;
-        aspect-ratio: 4 / 3 !important;
+        flex: 0 0 80px;
+        height: 80px;
+        max-width: 120px;
     }
 }
 
@@ -519,13 +487,61 @@
 
 .video-tile.pseudo-fullscreen {
     position: fixed !important;
-    inset: 0 !important;
-    width: 100vw !important;
-    height: 100dvh !important;
-    z-index: 100000 !important;
+    top: 48px !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 78px !important;
+    width: auto !important;
+    height: auto !important;
+    z-index: 35 !important;
     border-radius: 0 !important;
     border: none !important;
     background: #000 !important;
+}
+
+.meet-bar-peek {
+    pointer-events: auto;
+    background: rgba(30, 31, 32, 0.72);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    padding: 4px 28px;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+}
+
+.meet-bar-peek:hover {
+    background: rgba(40, 41, 44, 0.9);
+    color: var(--text-primary);
+}
+
+/* Sonner — один тост снизу справа, крупнее */
+[data-sonner-toaster][data-y-position="bottom"] {
+    bottom: 88px !important;
+}
+[data-sonner-toast] {
+    font-size: 14px !important;
+    padding: 14px 16px !important;
+    min-width: min(360px, calc(100vw - 24px)) !important;
+    gap: 10px !important;
+}
+[data-sonner-toast] [data-title] {
+    font-size: 14px !important;
+    font-weight: 600 !important;
+}
+[data-sonner-toast] [data-description] {
+    font-size: 13px !important;
+    opacity: 0.9 !important;
+}
+
+.chat-overlay-bubble {
+    font-size: 13px;
+    padding: 10px 12px;
+    max-width: 320px;
 }
 
 /* ПЛАВАЮЩИЕ КНОПКИ ПРИ НАВЕДЕНИИ НА КАРТОЧКУ */
@@ -699,7 +715,7 @@
     display: flex;
     justify-content: center;
     pointer-events: none;
-    z-index: 40;
+    z-index: 50;
 }
 
 .meet-bottom-bar {

@@ -9,6 +9,12 @@ import { Button } from './ui/button';
 import { Slider } from "./ui/slider";
 import { Switch } from "./ui/switch";
 import { Copy, Link, Settings, ShieldAlert, TerminalSquare, X } from 'lucide-react';
+import {
+  listRealAudioDevices,
+  listRealVideoDevices,
+  createBlackVideoTrack,
+  createSilentAudioTrack,
+} from '../lib/mediaPlaceholders';
 
 interface ModalsProps {
   conf: ReturnType<typeof useConference>;
@@ -76,13 +82,12 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
 
   useEffect(() => {
     if (!isSettingsOpen) return;
-    navigator.mediaDevices.enumerateDevices().then(d => {
-      setDevices(d);
-      const v = d.find(x => x.kind === 'videoinput');
-      const a = d.find(x => x.kind === 'audioinput');
-      if (v) setSelectedVideo(v.deviceId);
-      if (a) setSelectedAudio(a.deviceId);
-    });
+    (async () => {
+      const [v, a] = await Promise.all([listRealVideoDevices(), listRealAudioDevices()]);
+      setDevices([...v, ...a]);
+      if (v[0]) setSelectedVideo(v[0].deviceId);
+      if (a[0]) setSelectedAudio(a[0].deviceId);
+    })();
   }, [isSettingsOpen]);
 
   const copyLogs = () => {
@@ -101,19 +106,50 @@ export function Modals({ conf, isSettingsOpen, setIsSettingsOpen, isInviteOpen, 
 
   const handleDeviceChange = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
-        audio: selectedAudio ? { deviceId: { exact: selectedAudio } } : true
-      });
-      // остановить старые треки
-      conf.localStream?.getTracks().forEach(t => t.stop());
+      const wantCam = conf.isCamOn;
+      const wantMic = conf.isMicOn;
+      const stream = conf.ensureShellStream(conf.localStream);
+
+      if (wantCam && selectedVideo) {
+        const fresh = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: selectedVideo }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        const track = fresh.getVideoTracks()[0];
+        const old = stream.getVideoTracks()[0];
+        if (old) { stream.removeTrack(old); old.stop(); }
+        stream.addTrack(track);
+        await net.replaceTrack(track, 'video');
+      } else if (!wantCam) {
+        const old = stream.getVideoTracks()[0];
+        const black = createBlackVideoTrack();
+        if (old) { stream.removeTrack(old); old.stop(); }
+        stream.addTrack(black);
+        await net.replaceTrack(black, 'video');
+      }
+
+      if (wantMic && selectedAudio) {
+        const fresh = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: selectedAudio }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: false
+        });
+        const track = fresh.getAudioTracks()[0];
+        const old = stream.getAudioTracks()[0];
+        if (old) { stream.removeTrack(old); old.stop(); }
+        stream.addTrack(track);
+        await net.replaceTrack(track, 'audio');
+      } else if (!wantMic) {
+        const old = stream.getAudioTracks()[0];
+        const silent = createSilentAudioTrack();
+        if (old) { stream.removeTrack(old); old.stop(); }
+        stream.addTrack(silent);
+        await net.replaceTrack(silent, 'audio');
+      }
+
       conf.syncStream(stream);
-      if (stream.getVideoTracks()[0]) await net.replaceTrack(stream.getVideoTracks()[0], 'video');
-      if (stream.getAudioTracks()[0]) await net.replaceTrack(stream.getAudioTracks()[0], 'audio');
-      conf.setIsCamOn(!!stream.getVideoTracks()[0]);
-      conf.setIsMicOn(!!stream.getAudioTracks()[0]);
       toast.success("Настройки применены");
     } catch (e) {
+      console.error(e);
       toast.error("Ошибка смены оборудования");
     }
   };

@@ -1,30 +1,26 @@
-# Mobile (Expo) shell
+# Android APK (Capacitor)
 
-Thin React Native / Expo app that loads the deployed WHAT CONF web client in a WebView
-(with camera / mic permissions).
+Веб-сборка (`npm run build` → `dist/`) **вшивается** в APK. `WEB_APP_URL` не нужен.
 
-## Local
+## Локально
 
 ```bash
-cd mobile
 npm install
-npx expo install expo-build-properties
-# set URL
-# Windows PowerShell:
-$env:EXPO_PUBLIC_WEB_URL="https://your-pages-url"
-npx expo start
-```
-
-For a local APK:
-
-```bash
-npx expo prebuild --platform android
+npm install @capacitor/core @capacitor/cli @capacitor/android --save
+npm run build
+npx cap add android   # один раз
+npx cap sync android
 cd android && ./gradlew assembleRelease
 ```
 
-## CI release APK
+APK: `android/app/build/outputs/apk/release/app-release-unsigned.apk`
 
-Workflow: `.github/workflows/release-apk.yml`
+## CI
 
-1. Set repository variable `WEB_APP_URL` to your GitHub Pages URL
-2. Create a GitHub Release (tag) — the workflow builds APK and attaches it
+Workflow `.github/workflows/release-apk.yml` — на GitHub Release:
+1. `npm run build`
+2. `cap sync android`
+3. `assembleRelease`
+4. прикрепляет APK к релизу
+
+Папка `mobile/` (старый Expo WebView) больше не используется для релиза.

@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useConference } from '../hooks/useConference';
 import { VideoTile, ScreenTile } from './VideoTile';
 import { SidebarChat } from './SidebarChat';
 import { BottomBar } from './BottomBar';
 import { net } from '../lib/p2p-net';
+import { computeConferenceGrid } from '../lib/gridLayout';
 import { toast } from 'sonner';
 import { X, Hand, MonitorUp, SwitchCamera, TerminalSquare, MessageSquare, UserPlus, Settings } from 'lucide-react';
 
@@ -15,9 +16,35 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
   const [showReactions, setShowReactions] = useState(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [chatToasts, setChatToasts] = useState<ChatToast[]>([]);
+  const [barCollapsed, setBarCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false
+  );
+  const [gridBox, setGridBox] = useState({ w: 0, h: 0 });
   const msgLenRef = useRef(0);
   const chatOpenRef = useRef(false);
+  const gridRef = useRef<HTMLDivElement>(null);
   chatOpenRef.current = isChatOpen;
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onMq = () => setIsMobile(mq.matches);
+    onMq();
+    mq.addEventListener('change', onMq);
+    return () => mq.removeEventListener('change', onMq);
+  }, []);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0]?.contentRect;
+      if (!cr) return;
+      setGridBox({ w: cr.width, h: cr.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const len = conf.messages.length;
@@ -29,7 +56,6 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
         if (!conf.showChatToasts) return;
         const id = Date.now() + Math.random();
         setChatToasts(prev => [...prev.slice(-4), { id, sender: msg.sender, text: msg.text }]);
-        toast.message(msg.sender, { description: msg.text, duration: 4000 });
         setTimeout(() => {
           setChatToasts(prev => prev.filter(t => t.id !== id));
         }, 5000);
@@ -62,18 +88,10 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
     (conf.isScreenSharing ? 1 : 0) +
     1;
 
-  let gridClass = 'count-many';
-  if (pinnedId) {
-    gridClass = 'has-stage';
-  } else if (gridCount <= 1) {
-    gridClass = 'count-1';
-  } else if (gridCount === 2) {
-    gridClass = 'count-2';
-  } else if (gridCount === 3) {
-    gridClass = 'count-3';
-  } else if (gridCount <= 4) {
-    gridClass = 'count-4';
-  }
+  const layout = useMemo(
+    () => computeConferenceGrid(gridCount, isMobile, gridBox.w, gridBox.h),
+    [gridCount, isMobile, gridBox.w, gridBox.h]
+  );
 
   const kickParticipant = (id: string) => {
     if (confirm("Исключить участника из встречи?")) {
@@ -115,11 +133,22 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
     net.broadcast({ type: 'HAND_RAISE', peerId: net.peer?.id, isRaised: next, name: conf.myName });
   };
 
+  const gridStyle: React.CSSProperties | undefined = pinnedId
+    ? undefined
+    : {
+        gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`,
+      };
+
   return (
-    <div className="conference-container">
+    <div className={`conference-container ${barCollapsed ? 'bar-collapsed' : ''}`}>
       <div className={`conf-main-area ${isChatOpen ? 'chat-open' : ''}`}>
         <div className="conf-video-container">
-          <div className={`conf-grid ${gridClass}`}>
+          <div
+            ref={gridRef}
+            className={`conf-grid ${pinnedId ? 'has-stage' : ''} ${layout.stretchLast ? 'stretch-last' : ''}`}
+            style={gridStyle}
+          >
             <VideoTile
               peer={{
                 id: 'local',
@@ -190,7 +219,7 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
               </div>
             ))}
           </div>
-          
+
           {showReactions && (
             <div className="reactions-popover">
               {EMOJIS.map(e => (
@@ -229,6 +258,8 @@ export function ConferenceLayout({ conf }: { conf: ReturnType<typeof useConferen
         onInfo={() => window.dispatchEvent(new Event('openInvite'))}
         unreadCount={conf.unreadCount}
         openMobileSheet={() => setMobileSheetOpen(true)}
+        collapsed={barCollapsed}
+        onToggleCollapse={() => setBarCollapsed(v => !v)}
       />
 
       {mobileSheetOpen && (

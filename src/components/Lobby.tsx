@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { net, P2PNet } from '../lib/p2p-net';
 import { unlockAudioEngine, localVAD } from '../lib/audio';
+import { createBlackVideoTrack, createSilentAudioTrack, isPlaceholderTrack, pickCameraDeviceId } from '../lib/mediaPlaceholders';
 import { Mic, MicOff, Video, VideoOff, SwitchCamera, VideoIcon } from 'lucide-react';
 
 interface LobbyProps {
@@ -16,6 +17,7 @@ interface LobbyProps {
   isMirrored: boolean;
   localStream: MediaStream | null;
   syncStream: (stream: MediaStream | null) => void;
+  ensureShellStream: (base?: MediaStream | null) => MediaStream;
   setIsMicOn: (on: boolean) => void;
   setIsCamOn: (on: boolean) => void;
 }
@@ -33,6 +35,7 @@ export function Lobby({
   isMirrored,
   localStream,
   syncStream,
+  ensureShellStream,
   setIsMicOn,
   setIsCamOn
 }: LobbyProps) {
@@ -55,25 +58,37 @@ export function Lobby({
 
     const initPreview = async () => {
       try {
+        const deviceId = await pickCameraDeviceId('user');
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
         if (!active) {
           stream.getTracks().forEach(t => t.stop());
           return;
         }
+        // гарантируем оба трека
+        if (!stream.getAudioTracks().length) stream.addTrack(createSilentAudioTrack());
+        if (!stream.getVideoTracks().length) stream.addTrack(createBlackVideoTrack());
         syncStream(stream);
+        net.currentMicOn = true;
+        net.currentCamOn = true;
         localVAD.start(stream, true);
       } catch (e) {
         console.error('Camera error', e);
+        const shell = ensureShellStream(new MediaStream());
         setIsCamOn(false);
         setIsMicOn(false);
+        net.currentCamOn = false;
+        net.currentMicOn = false;
+        syncStream(shell);
       }
     };
     initPreview();
     return () => { active = false; };
-  }, [syncStream, setIsCamOn, setIsMicOn]);
+  }, [syncStream, setIsCamOn, setIsMicOn, ensureShellStream]);
 
   useEffect(() => {
     if (videoRef.current && localStream) {
@@ -83,17 +98,22 @@ export function Lobby({
 
   const resolvedName = () => myName.trim() || (`User-${Math.floor(Math.random() * 900 + 100)}`);
 
+  const prepareMedia = () => {
+    ensureShellStream(net.localStream || localStream);
+  };
+
   const createRoom = async () => {
     if (busy) return;
     setBusy(true);
     unlockAudioEngine();
+    prepareMedia();
     try {
       const name = resolvedName();
       setMyName(name);
       const code = await net.createRoom(null, name, isMicOn, isCamOn);
       onEnter(code);
-    } catch (e) {
-      alert("Ошибка создания комнаты");
+    } catch (e: any) {
+      alert(e?.message || "Ошибка создания комнаты");
     } finally {
       setBusy(false);
     }
@@ -105,27 +125,28 @@ export function Lobby({
     if (busy) return;
     setBusy(true);
     unlockAudioEngine();
+    prepareMedia();
     const name = resolvedName();
     setMyName(name);
-    // Сразу уходим в конференцию (как в оригинале prepareJoin)
     onEnter(code);
     try {
       await net.joinRoom(code, { name, isMicOn, isCamOn });
     } catch (e: any) {
       alert(e?.message || "Не удалось войти");
-      onEnter(''); // leave — parent should clear; use null via callback
-      // parent expects string — App will handle empty as leave
+      onEnter('');
     } finally {
       setBusy(false);
     }
   };
+
+  const showPreview = isCamOn && localStream?.getVideoTracks().some(t => t.readyState === 'live' && !isPlaceholderTrack(t));
 
   return (
     <div className="lobby-container">
       <div className="lobby-card">
         <div className="lobby-preview-pane">
           <div className={`video-tile ${isMirrored && currentFacingMode === 'user' ? 'mirrored' : ''}`}>
-            {isCamOn && localStream?.getVideoTracks().some(t => t.readyState === 'live') ? (
+            {showPreview ? (
               <video ref={videoRef} autoPlay playsInline muted />
             ) : (
               <div className="tile-avatar">
@@ -145,7 +166,7 @@ export function Lobby({
             </button>
           </div>
         </div>
-        
+
         <div className="lobby-settings-pane">
           <div className="input-group">
             <label className="studio-label">NAME / CALLSIGN</label>
@@ -157,7 +178,7 @@ export function Lobby({
               maxLength={18}
             />
           </div>
-          
+
           <button type="button" className="studio-btn-primary" onClick={createRoom} disabled={busy}>
             <VideoIcon size={18} /> Создать встречу
           </button>

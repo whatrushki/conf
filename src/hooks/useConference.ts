@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { net } from '../lib/p2p-net';
 import { localVAD, soundFx } from '../lib/audio';
+import {
+  createBlackVideoTrack,
+  createSilentAudioTrack,
+  pickCameraDeviceId,
+} from '../lib/mediaPlaceholders';
 
 export type PeerStatus = {
   id: string;
@@ -36,27 +41,32 @@ async function getMedia(opts: MediaStreamConstraints) {
   return navigator.mediaDevices.getUserMedia(opts);
 }
 
+function stopTrackSafe(track: MediaStreamTrack | null | undefined) {
+  if (!track) return;
+  try { track.stop(); } catch { /* */ }
+}
+
 export function useConference() {
   const [online, setOnline] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [roomId, setRoomId] = useState<string | null>(null);
-  
+
   const [myName, setMyName] = useState("User");
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCamOn, setIsCamOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
-  
+
   const [currentFacingMode, setCurrentFacingMode] = useState<'user' | 'environment'>('user');
   const [isMirrored, setIsMirrored] = useState(true);
-  
+
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
-  
+
   const [peers, setPeers] = useState<Record<string, PeerStatus>>({});
   const [screenStreams, setScreenStreams] = useState<Record<string, ScreenStatus>>({});
-  
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -64,7 +74,7 @@ export function useConference() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [hostId, setHostId] = useState<string | null>(null);
   const [hostName, setHostName] = useState('');
-  
+
   const [isLocked, setIsLocked] = useState(false);
   const [allowScreenShare, setAllowScreenShare] = useState(true);
 
@@ -75,6 +85,7 @@ export function useConference() {
   const isMicOnRef = useRef(isMicOn);
   const isCamOnRef = useRef(isCamOn);
   const facingRef = useRef(currentFacingMode);
+  const mediaLock = useRef(Promise.resolve());
   isMicOnRef.current = isMicOn;
   isCamOnRef.current = isCamOn;
   facingRef.current = currentFacingMode;
@@ -83,6 +94,11 @@ export function useConference() {
     soundFx.enabled = soundEnabled;
     soundFx.volume = soundVolume;
   }, [soundEnabled, soundVolume]);
+
+  useEffect(() => {
+    net.currentMicOn = isMicOn;
+    net.currentCamOn = isCamOn;
+  }, [isMicOn, isCamOn]);
 
   useEffect(() => {
     localVAD.onSpeakingChange = (speaking) => {
@@ -99,138 +115,160 @@ export function useConference() {
     setLocalStream(stream);
   }, []);
 
-  const stopTracksOfKind = useCallback((stream: MediaStream | null, kind: 'audio' | 'video') => {
-    if (!stream) return;
-    const tracks = kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
-    tracks.forEach(t => {
-      try { stream.removeTrack(t); } catch { /* */ }
-      try { t.stop(); } catch { /* */ }
-    });
-    // на всякий случай гасим «осиротевшие» треки того же kind на net.localStream
-    const netStream = net.localStream;
-    if (netStream && netStream !== stream) {
-      const extra = kind === 'audio' ? netStream.getAudioTracks() : netStream.getVideoTracks();
-      extra.forEach(t => {
-        try { netStream.removeTrack(t); } catch { /* */ }
-        try { t.stop(); } catch { /* */ }
-      });
+  /** Всегда audio+video (реальный или placeholder) — иначе PeerJS не создаёт sender. */
+  const ensureShellStream = useCallback((base?: MediaStream | null) => {
+    const stream = base && base instanceof MediaStream ? base : (net.localStream || new MediaStream());
+    if (!stream.getAudioTracks().some(t => t.readyState === 'live')) {
+      stream.addTrack(createSilentAudioTrack());
+    }
+    if (!stream.getVideoTracks().some(t => t.readyState === 'live')) {
+      stream.addTrack(createBlackVideoTrack());
+    }
+    syncStream(stream);
+    return stream;
+  }, [syncStream]);
+
+  const withMediaLock = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const prev = mediaLock.current;
+    let release!: () => void;
+    mediaLock.current = new Promise<void>(r => { release = r; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
     }
   }, []);
 
-  const rebuildStream = useCallback((base: MediaStream | null) => {
-    const next = new MediaStream();
-    (base?.getTracks() || []).forEach(t => {
-      if (t.readyState === 'live') next.addTrack(t);
-    });
-    syncStream(next.getTracks().length ? next : null);
-    return next.getTracks().length ? next : null;
-  }, [syncStream]);
-
   const toggleMic = useCallback(async () => {
     soundFx.click();
-    const stream = net.localStream || localStream;
+    await withMediaLock(async () => {
+      const stream = ensureShellStream(net.localStream || localStream);
 
-    if (isMicOnRef.current) {
-      stopTracksOfKind(stream, 'audio');
-      localVAD.stop();
-      await net.replaceTrack(null, 'audio');
-      net.broadcast({ type: 'MIC_STATUS', isMicOn: false });
-      setIsMicOn(false);
-      rebuildStream(stream);
-      return;
-    }
+      if (isMicOnRef.current) {
+        const old = stream.getAudioTracks()[0];
+        const silent = createSilentAudioTrack();
+        if (old) {
+          stream.removeTrack(old);
+          stopTrackSafe(old);
+        }
+        stream.addTrack(silent);
+        syncStream(stream);
+        localVAD.stop();
+        await net.replaceTrack(silent, 'audio');
+        net.currentMicOn = false;
+        net.broadcast({ type: 'MIC_STATUS', isMicOn: false });
+        setIsMicOn(false);
+        return;
+      }
 
-    try {
-      const fresh = await getMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false
-      });
-      const track = fresh.getAudioTracks()[0];
-      // остановить лишние треки из fresh
-      fresh.getVideoTracks().forEach(t => t.stop());
-      const next = stream && stream.getTracks().some(t => t.readyState === 'live')
-        ? stream
-        : new MediaStream();
-      next.getAudioTracks().forEach(t => { next.removeTrack(t); t.stop(); });
-      next.addTrack(track);
-      syncStream(next);
-      await net.replaceTrack(track, 'audio');
-      localVAD.start(next, true);
-      net.broadcast({ type: 'MIC_STATUS', isMicOn: true });
-      setIsMicOn(true);
-    } catch (e) {
-      console.error(e);
-      alert('Не удалось включить микрофон');
-    }
-  }, [localStream, stopTracksOfKind, syncStream, rebuildStream]);
+      try {
+        const fresh = await getMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: false
+        });
+        const track = fresh.getAudioTracks()[0];
+        fresh.getVideoTracks().forEach(stopTrackSafe);
+        const old = stream.getAudioTracks()[0];
+        if (old) {
+          stream.removeTrack(old);
+          stopTrackSafe(old);
+        }
+        stream.addTrack(track);
+        syncStream(stream);
+        await net.replaceTrack(track, 'audio');
+        localVAD.start(stream, true);
+        net.currentMicOn = true;
+        net.broadcast({ type: 'MIC_STATUS', isMicOn: true });
+        setIsMicOn(true);
+      } catch (e) {
+        console.error(e);
+        alert('Не удалось включить микрофон');
+      }
+    });
+  }, [localStream, ensureShellStream, syncStream, withMediaLock]);
 
   const toggleCam = useCallback(async () => {
     soundFx.click();
-    const stream = net.localStream || localStream;
+    await withMediaLock(async () => {
+      const stream = ensureShellStream(net.localStream || localStream);
 
-    if (isCamOnRef.current) {
-      stopTracksOfKind(stream, 'video');
-      await net.replaceTrack(null, 'video');
-      net.broadcast({ type: 'CAM_STATUS', isCamOn: false });
-      setIsCamOn(false);
-      rebuildStream(stream);
-      return;
-    }
+      if (isCamOnRef.current) {
+        const old = stream.getVideoTracks()[0];
+        const black = createBlackVideoTrack();
+        if (old) {
+          stream.removeTrack(old);
+          stopTrackSafe(old);
+        }
+        stream.addTrack(black);
+        syncStream(stream);
+        await net.replaceTrack(black, 'video');
+        net.currentCamOn = false;
+        net.broadcast({ type: 'CAM_STATUS', isCamOn: false });
+        setIsCamOn(false);
+        return;
+      }
 
-    try {
-      const fresh = await getMedia({
-        video: {
-          facingMode: { ideal: facingRef.current },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
-      const track = fresh.getVideoTracks()[0];
-      fresh.getAudioTracks().forEach(t => t.stop());
-      const next = stream && stream.getTracks().some(t => t.readyState === 'live')
-        ? stream
-        : new MediaStream();
-      next.getVideoTracks().forEach(t => { next.removeTrack(t); t.stop(); });
-      next.addTrack(track);
-      syncStream(next);
-      await net.replaceTrack(track, 'video');
-      net.broadcast({ type: 'CAM_STATUS', isCamOn: true });
-      setIsCamOn(true);
-    } catch (e) {
-      console.error(e);
-      alert('Не удалось включить камеру');
-    }
-  }, [localStream, stopTracksOfKind, syncStream, rebuildStream]);
+      try {
+        const deviceId = await pickCameraDeviceId(facingRef.current);
+        const fresh = await getMedia({
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: { ideal: facingRef.current }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        const track = fresh.getVideoTracks()[0];
+        fresh.getAudioTracks().forEach(stopTrackSafe);
+        const old = stream.getVideoTracks()[0];
+        if (old) {
+          stream.removeTrack(old);
+          stopTrackSafe(old);
+        }
+        stream.addTrack(track);
+        syncStream(stream);
+        await net.replaceTrack(track, 'video');
+        net.currentCamOn = true;
+        net.broadcast({ type: 'CAM_STATUS', isCamOn: true });
+        setIsCamOn(true);
+      } catch (e) {
+        console.error(e);
+        alert('Не удалось включить камеру');
+      }
+    });
+  }, [localStream, ensureShellStream, syncStream, withMediaLock]);
 
   const flipCamera = useCallback(async () => {
     soundFx.click();
     const nextMode = facingRef.current === 'user' ? 'environment' : 'user';
     if (!isCamOnRef.current) {
       setCurrentFacingMode(nextMode);
+      facingRef.current = nextMode;
       return;
     }
-    try {
-      const fresh = await getMedia({
-        video: {
-          facingMode: { ideal: nextMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
-      const newTrack = fresh.getVideoTracks()[0];
-      const stream = net.localStream || localStream || new MediaStream();
-      stopTracksOfKind(stream, 'video');
-      stream.addTrack(newTrack);
-      syncStream(stream);
-      setCurrentFacingMode(nextMode);
-      await net.replaceTrack(newTrack, 'video');
-      net.broadcast({ type: 'CAM_STATUS', isCamOn: true });
-    } catch (e) {
-      console.error(e);
-      alert('Ошибка смены камеры');
-    }
-  }, [localStream, stopTracksOfKind, syncStream]);
+    await withMediaLock(async () => {
+      try {
+        const deviceId = await pickCameraDeviceId(nextMode);
+        const videoConstraint: MediaTrackConstraints = deviceId
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { facingMode: { ideal: nextMode }, width: { ideal: 1280 }, height: { ideal: 720 } };
+        const fresh = await getMedia({ video: videoConstraint, audio: false });
+        const newTrack = fresh.getVideoTracks()[0];
+        fresh.getAudioTracks().forEach(stopTrackSafe);
+        const stream = ensureShellStream(net.localStream || localStream);
+        const old = stream.getVideoTracks()[0];
+        if (old) { stream.removeTrack(old); stopTrackSafe(old); }
+        stream.addTrack(newTrack);
+        syncStream(stream);
+        setCurrentFacingMode(nextMode);
+        facingRef.current = nextMode;
+        await net.replaceTrack(newTrack, 'video');
+        net.broadcast({ type: 'CAM_STATUS', isCamOn: true });
+      } catch (e) {
+        console.error(e);
+        alert('Ошибка смены камеры');
+      }
+    });
+  }, [localStream, ensureShellStream, syncStream, withMediaLock]);
 
   const leaveCallRef = useRef<() => void>(() => {});
 
@@ -274,13 +312,13 @@ export function useConference() {
           [peerId]: {
             ...prev[peerId],
             id: peerId,
-            name: metadata?.name || 'Участник',
-            isMicOn: metadata?.isMicOn ?? true,
-            isCamOn: metadata?.isCamOn ?? true,
+            name: metadata?.name || prev[peerId]?.name || 'Участник',
+            isMicOn: metadata?.isMicOn ?? prev[peerId]?.isMicOn ?? true,
+            isCamOn: metadata?.isCamOn ?? prev[peerId]?.isCamOn ?? true,
             stream,
             volume: prev[peerId]?.volume ?? 1.0,
-            isSpeaking: false,
-            isHandRaised: false
+            isSpeaking: prev[peerId]?.isSpeaking ?? false,
+            isHandRaised: prev[peerId]?.isHandRaised ?? false
           }
         }));
       }
@@ -401,12 +439,12 @@ export function useConference() {
     peers, screenStreams, messages, reactions, unreadCount,
     isAdmin, hostId, hostName, isLocked, allowScreenShare,
     soundEnabled, soundVolume, showChatToasts,
-    
+
     setMyName, setIsMicOn, setIsCamOn, setIsScreenSharing, setIsHandRaised,
     setCurrentFacingMode, setIsMirrored, setLocalStream, setLocalScreenStream, setIsLocalSpeaking,
     setUnreadCount, setMessages, spawnReaction, setSoundEnabled, setSoundVolume, setShowChatToasts,
     setAllowScreenShare, setIsLocked, setRoomId,
-    
-    toggleMic, toggleCam, flipCamera, enterRoom, leaveCall, syncStream
+
+    toggleMic, toggleCam, flipCamera, enterRoom, leaveCall, syncStream, ensureShellStream
   };
 }

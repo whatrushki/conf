@@ -34,6 +34,9 @@ export class P2PNet {
 
   initialMicState: boolean = true;
   initialCamState: boolean = true;
+  /** Актуальные флаги для metadata в call() — не путать с initial* */
+  currentMicOn: boolean = true;
+  currentCamOn: boolean = true;
 
   peers: Map<string, any> = new Map();
   localStream: MediaStream | null = null;
@@ -120,6 +123,8 @@ export class P2PNet {
     this.userName = myName;
     this.initialMicState = isMicOn;
     this.initialCamState = isCamOn;
+    this.currentMicOn = isMicOn;
+    this.currentCamOn = isCamOn;
     let attempts = 0;
     let lastErr: any = null;
 
@@ -164,6 +169,8 @@ export class P2PNet {
     this.userName = myData.name || 'Guest';
     this.initialMicState = myData.isMicOn ?? true;
     this.initialCamState = myData.isCamOn ?? true;
+    this.currentMicOn = this.initialMicState;
+    this.currentCamOn = this.initialCamState;
     const hostPeerId = `${this.appPrefix}-${cleaned}`;
 
     let lastErr: any = null;
@@ -290,24 +297,21 @@ export class P2PNet {
       if (this.isDestroyed || !this.peer) return;
 
       this.peers.forEach((record, peerId) => {
-        if (record.call && record.call.peerConnection) {
-          const pc = record.call.peerConnection;
-          const iceState = pc.iceConnectionState;
+        if (!record.call?.peerConnection) return;
+        const pc = record.call.peerConnection as RTCPeerConnection;
+        const iceState = pc.iceConnectionState;
 
-          if (iceState === 'failed' || iceState === 'disconnected') {
-            this._audit('WARN', `ICE сбой у ${peerId} (${iceState}). Запуск ICE Restart...`);
-            try {
-              if (pc.restartIce) pc.restartIce();
-            } catch (e) { }
-          }
-
-          const receivers = pc.getReceivers ? pc.getReceivers() : [];
-          const activeTracks = receivers.filter((r: any) => r.track && r.track.readyState === 'live');
-
-          if (receivers.length > 0 && activeTracks.length === 0 && record.isReady) {
-            this._audit('WARN', `У пира ${peerId} застряли медиа-треки. Восстановление сессии...`);
-            this.repairPeerMedia(peerId);
-          }
+        if (iceState === 'failed') {
+          this._audit('WARN', `ICE failed у ${peerId}. restartIce + repair`);
+          try {
+            if (pc.restartIce) pc.restartIce();
+          } catch (e) { }
+          this.repairPeerMedia(peerId);
+        } else if (iceState === 'disconnected') {
+          this._audit('WARN', `ICE disconnected у ${peerId}. restartIce`);
+          try {
+            if (pc.restartIce) pc.restartIce();
+          } catch (e) { }
         }
       });
     }, P2PNet.WATCHDOG_INTERVAL);
@@ -315,19 +319,26 @@ export class P2PNet {
 
   repairPeerMedia(peerId: string) {
     if (!this.localStream || this.isDestroyed) return;
-    this._audit('MEDIA', `Восстановление медиа-сессии с ${peerId}`);
     const record = this.peers.get(peerId);
-    if (record && record.call) {
+    if (!record) return;
+    const pc = record.call?.peerConnection as RTCPeerConnection | undefined;
+    const ice = pc?.iceConnectionState;
+    if (ice && ice !== 'failed' && ice !== 'disconnected' && ice !== 'closed') {
+      return;
+    }
+    this._audit('MEDIA', `Восстановление медиа-сессии с ${peerId} (ICE=${ice})`);
+    if (record.call) {
       try { record.call.close(); } catch (e) { }
+      record.call = null;
     }
     setTimeout(() => {
       this.call(peerId, this.localStream, {
         type: 'camera',
         name: this.userName,
-        isMicOn: this.initialMicState,
-        isCamOn: this.initialCamState
+        isMicOn: this.currentMicOn,
+        isCamOn: this.currentCamOn
       });
-    }, 300);
+    }, 400);
   }
 
   _startHeartbeat() {
@@ -338,8 +349,8 @@ export class P2PNet {
         if (record.conn && record.conn.open) {
           record.conn.send({ __sys: 'PING', ts: now });
         }
-        if (record.lastSeen && now - record.lastSeen > 12000) {
-          this._audit('WARN', `Таймаут пира ${peerId} (>12s).`);
+        if (record.lastSeen && now - record.lastSeen > 20000) {
+          this._audit('WARN', `Таймаут пира ${peerId} (>20s).`);
           this._cleanupPeer(peerId);
         }
       });
@@ -515,8 +526,8 @@ export class P2PNet {
           this.call(senderPeerId, this.localStream, {
             type: 'camera',
             name: this.userName,
-            isMicOn: this.initialMicState,
-            isCamOn: this.initialCamState
+            isMicOn: this.currentMicOn,
+            isCamOn: this.currentCamOn
           });
         }
       }, 300);
@@ -552,8 +563,8 @@ export class P2PNet {
             this.call(packet.peerId, this.localStream, {
               type: 'camera',
               name: this.userName,
-              isMicOn: this.initialMicState,
-              isCamOn: this.initialCamState
+              isMicOn: this.currentMicOn,
+              isCamOn: this.currentCamOn
             });
           }
         }, 400);
@@ -651,12 +662,28 @@ export class P2PNet {
   }
 
   _setupCallEvents(call: MediaConnection, peerId: string, meta: any) {
+    const cacheSenders = () => {
+      const record = this.peers.get(peerId);
+      const pc = call.peerConnection as RTCPeerConnection | undefined;
+      if (!record || !pc) return;
+      record.senders = record.senders || {};
+      pc.getSenders().forEach((s) => {
+        if (s.track?.kind === 'audio') record.senders.audio = s;
+        if (s.track?.kind === 'video') record.senders.video = s;
+      });
+      // если track ещё null (placeholder уже мог уйти), кэшируем по порядку
+      const senders = pc.getSenders();
+      if (!record.senders.audio && senders[0]) record.senders.audio = senders[0];
+      if (!record.senders.video && senders[1]) record.senders.video = senders[1];
+    };
+
     call.on('stream', (remoteStream) => {
       const vCount = remoteStream.getVideoTracks().length;
       const aCount = remoteStream.getAudioTracks().length;
       const peerName = this.peers.get(peerId)?.name || meta.name || 'Участник';
 
       this._audit('MEDIA', `Поток от ${peerId} (${peerName}) готов (Видео:${vCount}, Аудио:${aCount})`);
+      cacheSenders();
       this.emit('remote-stream', {
         peerId,
         stream: remoteStream,
@@ -678,12 +705,18 @@ export class P2PNet {
     });
 
     if (call.peerConnection) {
+      cacheSenders();
+      setTimeout(cacheSenders, 400);
       call.peerConnection.oniceconnectionstatechange = () => {
         const state = call.peerConnection.iceConnectionState;
         this._audit('ICE', `ICE [${peerId}]: ${state}`);
-        if (state === 'failed' || state === 'disconnected') {
+        if (state === 'failed') {
           try { (call.peerConnection as any).restartIce(); } catch (e) { }
         }
+      };
+      call.peerConnection.onconnectionstatechange = () => {
+        const st = (call.peerConnection as RTCPeerConnection).connectionState;
+        this._audit('ICE', `PC [${peerId}]: ${st}`);
       };
     }
   }
@@ -692,53 +725,58 @@ export class P2PNet {
     this._audit('MEDIA', `Замена трека [${kind}] на всех пирах...`);
     const promises: Promise<any>[] = [];
 
-    const findSender = (pc: RTCPeerConnection) => {
+    const findSender = (pc: RTCPeerConnection, peerRecord: any) => {
+      // кэш sender по kind — критично после replaceTrack(null)
+      if (!peerRecord.senders) peerRecord.senders = {};
+      if (peerRecord.senders[kind]) {
+        const cached = peerRecord.senders[kind] as RTCRtpSender;
+        if (pc.getSenders().includes(cached)) return cached;
+      }
+
       const senders = pc.getSenders();
       let target = senders.find((s) => s.track?.kind === kind);
-      if (target) return target;
-
-      if (pc.getTransceivers) {
+      if (!target && pc.getTransceivers) {
         const trans = pc.getTransceivers().find((t) => {
           if (t.sender?.track?.kind === kind) return true;
           if (t.receiver?.track?.kind === kind) return true;
-          // после replaceTrack(null) track у sender пустой — ищем по receiver / direction
           if (t.sender && !t.sender.track) {
             const dir = t.direction;
-            if ((dir === 'sendrecv' || dir === 'sendonly') && t.receiver?.track?.kind === kind) return true;
-            if ((dir === 'sendrecv' || dir === 'sendonly') && !t.receiver?.track) {
-              // эвристика: audio обычно первый transceiver
-              const all = pc.getTransceivers().filter(x =>
-                x.direction === 'sendrecv' || x.direction === 'sendonly'
-              );
-              const idx = all.indexOf(t);
-              if (kind === 'audio' && idx === 0) return true;
-              if (kind === 'video' && (idx === 1 || (idx === 0 && all.length === 1))) return true;
-            }
+            if (dir !== 'sendrecv' && dir !== 'sendonly') return false;
+            const all = pc.getTransceivers().filter(x =>
+              x.direction === 'sendrecv' || x.direction === 'sendonly'
+            );
+            const idx = all.indexOf(t);
+            if (kind === 'audio' && idx === 0) return true;
+            if (kind === 'video' && idx >= 1) return true;
+            if (kind === 'video' && all.length === 1 && idx === 0) return true;
           }
           return false;
         });
-        if (trans?.sender) return trans.sender;
+        if (trans?.sender) target = trans.sender;
       }
-
-      // последний шанс: любой sender без track
-      return senders.find((s) => !s.track) || null;
+      if (target) peerRecord.senders[kind] = target;
+      return target || null;
     };
 
     this.peers.forEach((peerRecord, peerId) => {
       if (peerRecord.call && peerRecord.call.peerConnection) {
         const pc = peerRecord.call.peerConnection as RTCPeerConnection;
-        const targetSender = findSender(pc);
+        const targetSender = findSender(pc, peerRecord);
 
         if (targetSender) {
           promises.push(
-            targetSender.replaceTrack(newTrack).catch((e: any) => {
+            targetSender.replaceTrack(newTrack).then(() => {
+              if (newTrack) peerRecord.senders[kind] = targetSender;
+            }).catch((e: any) => {
               this._audit('ERR', `Ошибка replaceTrack у ${peerId}: ${e.message}`);
             })
           );
         } else if (newTrack && this.localStream) {
           try {
-            pc.addTrack(newTrack, this.localStream);
-            this._audit('MEDIA', `addTrack [${kind}] для ${peerId} (sender не найден)`);
+            const sender = pc.addTrack(newTrack, this.localStream);
+            if (!peerRecord.senders) peerRecord.senders = {};
+            peerRecord.senders[kind] = sender;
+            this._audit('MEDIA', `addTrack [${kind}] для ${peerId}`);
           } catch (e: any) {
             this._audit('ERR', `addTrack у ${peerId}: ${e.message}`);
           }

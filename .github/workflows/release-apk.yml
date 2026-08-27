@@ -1,5 +1,5 @@
-# Builds Expo Android release APK and attaches it to a GitHub Release.
-# Set repository variable WEB_APP_URL to the deployed web client URL.
+# Builds web dist, syncs into Capacitor Android, assembles release APK,
+# and attaches it to the GitHub Release. No WEB_APP_URL — assets are bundled.
 
 name: Release APK
 
@@ -18,9 +18,6 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile
 
     steps:
       - name: Checkout
@@ -30,6 +27,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -37,47 +35,22 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Install mobile deps
+      - name: Install deps
         run: npm install
 
-      - name: Install expo-build-properties
-        run: npx expo install expo-build-properties
+      - name: Install Capacitor Android
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android --save-exact
 
-      - name: Patch web URL into app.json
-        env:
-          WEB_APP_URL: ${{ vars.WEB_APP_URL }}
+      - name: Build web
+        run: npm run build
+
+      - name: Capacitor sync android
         run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const url = process.env.WEB_APP_URL || 'https://example.com';
-          const app = JSON.parse(fs.readFileSync('app.json', 'utf8'));
-          app.expo.extra = app.expo.extra || {};
-          app.expo.extra.webAppUrl = url;
-          fs.writeFileSync('app.json', JSON.stringify(app, null, 2));
-          console.log('webAppUrl =', url);
-          NODE
-
-      - name: Create placeholder icons
-        run: |
-          mkdir -p assets
-          python3 - <<'PY'
-          import struct, zlib, pathlib
-          def png(w,h,rgb=(9,9,11)):
-              def chunk(t,d):
-                  return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
-              raw=b''.join(b'\x00'+bytes(rgb)*w for _ in range(h))
-              return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
-          pathlib.Path('assets/icon.png').write_bytes(png(1024,1024))
-          pathlib.Path('assets/adaptive-icon.png').write_bytes(png(1024,1024))
-          PY
-
-      - name: Expo prebuild (android)
-        env:
-          EXPO_PUBLIC_WEB_URL: ${{ vars.WEB_APP_URL }}
-        run: npx expo prebuild --platform android --non-interactive
+          npx cap add android || true
+          npx cap sync android
 
       - name: Build release APK
-        working-directory: mobile/android
+        working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
@@ -87,20 +60,19 @@ jobs:
         run: |
           APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "Found $APK"
           ls -lah "$APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: what-conf-release-apk
-          path: mobile/${{ steps.apk.outputs.path }}
+          path: ${{ steps.apk.outputs.path }}
 
       - name: Attach APK to GitHub Release
         if: github.event_name == 'release' || inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
-          files: mobile/${{ steps.apk.outputs.path }}
+          files: ${{ steps.apk.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

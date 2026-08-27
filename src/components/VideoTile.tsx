@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { PeerStatus, ScreenStatus } from '../hooks/useConference';
 import { net } from '../lib/p2p-net';
 import { avatarColorForId } from '../lib/utils';
+import { isPlaceholderTrack } from '../lib/mediaPlaceholders';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -45,7 +46,8 @@ export function VideoTile({ peer, isLocal, isMirrored, isPinned, onPin, isAdmin,
 
   const toggleFullscreen = () => setIsFullscreen(!isFullscreen);
   const isHost = hostId === peer.id || (isLocal && net.isHost);
-  const showVideo = peer.isCamOn && peer.stream && peer.stream.getVideoTracks().some(t => t.readyState === 'live');
+  const liveVideo = peer.stream?.getVideoTracks().find(t => t.readyState === 'live' && !isPlaceholderTrack(t));
+  const showVideo = !!peer.isCamOn && !!liveVideo;
 
   return (
     <div className={`video-tile ${isMirrored ? 'mirrored' : ''} ${peer.isSpeaking ? 'speaking' : ''} ${isPinned ? 'is-stage' : ''} ${isFullscreen ? 'pseudo-fullscreen' : ''}`}>

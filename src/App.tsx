@@ -44,7 +44,7 @@ export default function App() {
 
   return (
     <div className="conf-app" id="appRoot">
-      <Toaster theme="dark" position="top-center" />
+      <Toaster theme="dark" position="bottom-right" richColors closeButton />
       
       <header className="studio-header">
         <div className="studio-logo-area">
@@ -57,9 +57,9 @@ export default function App() {
             <span className="status-dot"></span>
             <span>{conf.reconnecting ? 'RECONNECTING' : (conf.online ? (conf.roomId ? `ROOM: ${conf.roomId}` : 'ONLINE') : 'STANDBY')}</span>
           </div>
-          <button className="studio-btn-compact" onClick={() => setIsAuditOpen(true)} title="Системный аудит">
+          <button className="studio-btn-compact hide-mobile" onClick={() => setIsAuditOpen(true)} title="Системный аудит">
             <TerminalSquare size={14} className="text-yellow-400" />
-            <span className="hide-mobile">Audit</span>
+            <span>Audit</span>
           </button>
           <button className="studio-btn-compact hide-mobile" onClick={() => setIsSettingsOpen(true)} title="Настройки">
             <Settings size={14} />
@@ -81,6 +81,7 @@ export default function App() {
           isMirrored={conf.isMirrored}
           localStream={conf.localStream}
           syncStream={conf.syncStream}
+          ensureShellStream={conf.ensureShellStream}
           setIsMicOn={conf.setIsMicOn}
           setIsCamOn={conf.setIsCamOn}
         />
