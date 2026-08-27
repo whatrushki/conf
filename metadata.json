@@ -1,0 +1,6 @@
+{
+  "name": "WHAT CONF",
+  "description": "A P2P WebRTC Conference Application based on React and Shadcn UI.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
