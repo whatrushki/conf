@@ -1,17 +1,415 @@
 <!doctype html>
 <html lang="ru">
-  <head>
+
+<head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>WHAT CONF</title>
-    <meta name="description" content="WHAT CONF — P2P видеоконференции" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+    <link rel="stylesheet" href="styles.css" />
+
+    <!-- Dependencies via CDN: PeerJS, Lucide Icons, QRCode -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+
+<body>
+    <div class="conf-app" id="appRoot">
+        <!-- HEADER -->
+        <header class="studio-header" id="mainHeader">
+            <div class="studio-logo-area">
+                <span class="gemini-sparkle">✦</span>
+                <div class="studio-title">WHAT CONF</div>
+            </div>
+
+            <div class="header-actions">
+                <div class="studio-badge" id="headerStatusBadge">
+                    <span class="status-dot"></span>
+                    <span id="headerStatusText">STANDBY</span>
+                </div>
+                <button type="button" class="studio-btn-compact hide-mobile" id="btnOpenAudit" title="Системный аудит">
+                    <i data-lucide="terminal-square" style="color: #facc15; width: 14px; height: 14px;"></i>
+                    <span>Audit</span>
+                </button>
+                <button type="button" class="studio-btn-compact hide-mobile" id="btnOpenSettings" title="Настройки">
+                    <i data-lucide="settings" style="width: 14px; height: 14px;"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- SCREEN 1: LOBBY -->
+        <main class="lobby-container" id="lobbyScreen">
+            <div class="lobby-card">
+                <div class="lobby-preview-pane">
+                    <div class="video-tile mirrored" id="lobbyVideoTile">
+                        <video id="lobbyPreviewVideo" autoplay playsinline muted></video>
+                        <div class="tile-avatar hidden" id="lobbyAvatarFallback">
+                            <span class="material-symbols-outlined">person</span>
+                        </div>
+                    </div>
+                    <div class="preview-controls">
+                        <button type="button" class="studio-btn-secondary" id="lobbyToggleMic">
+                            <i data-lucide="mic" style="width: 18px; height: 18px;"></i> <span
+                                id="lobbyMicText">Mic</span>
+                        </button>
+                        <button type="button" class="studio-btn-secondary" id="lobbyToggleCam">
+                            <i data-lucide="video" style="width: 18px; height: 18px;"></i> <span
+                                id="lobbyCamText">Cam</span>
+                        </button>
+                        <button type="button" class="studio-btn-secondary" id="lobbyFlipCam" title="Сменить камеру">
+                            <i data-lucide="switch-camera" style="width: 18px; height: 18px;"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="lobby-settings-pane">
+                    <div class="input-group">
+                        <label class="studio-label">NAME / CALLSIGN</label>
+                        <input class="studio-input" id="lobbyInputName" placeholder="Ваше имя..." maxlength="18"
+                            value="User" />
+                    </div>
+
+                    <button type="button" class="studio-btn-primary" id="btnCreateRoom">
+                        <i data-lucide="video" style="width: 18px; height: 18px;"></i> Создать встречу
+                    </button>
+
+                    <div class="divider-text">
+                        <span>ИЛИ ВХОД ПО КОДУ</span>
+                    </div>
+
+                    <div class="join-row">
+                        <input class="studio-input input-room-code" id="lobbyInputCode" placeholder="КОД"
+                            maxlength="6" />
+                        <button type="button" class="studio-btn-secondary" id="btnJoinRoom">Войти</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- SCREEN 2: CONFERENCE -->
+        <main class="conference-container hidden" id="conferenceScreen">
+            <div class="conf-body-split" id="confBodySplit">
+                <!-- LEFT PANE: Video Grid + Bottom Bar -->
+                <div class="conf-left-pane" id="confLeftPane">
+                    <div class="conf-grid" id="confGrid">
+                        <!-- Video tiles rendered dynamically -->
+                    </div>
+
+                    <!-- In-Video Chat Toast Preview -->
+                    <div class="chat-toast-container" id="chatToastContainer"></div>
+
+                    <!-- Floating Reactions Layer -->
+                    <div id="reactionsLayer"></div>
+
+                    <!-- Multi-Click Reactions Popover -->
+                    <div class="reactions-popover hidden" id="reactionsPopover">
+                        <button type="button" class="reaction-item-btn" data-emoji="👍">👍</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="❤️">❤️</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="😂">😂</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="🔥">🔥</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="🎉">🎉</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="👏">👏</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="😮">😮</button>
+                        <button type="button" class="reaction-item-btn" data-emoji="🤔">🤔</button>
+                        <button type="button" class="reaction-item-close" id="btnCloseReactions">
+                            <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+                        </button>
+                    </div>
+
+                    <!-- FLOATING MEET BOTTOM BAR (Strictly inside Left Pane) -->
+                    <div class="meet-bar-wrapper" id="meetBarWrapper">
+                        <footer class="meet-bottom-bar" id="meetBottomBar">
+                            <div class="meet-bar-left hide-mobile">
+                                <div class="meet-time-pill" id="meetClock">00:00</div>
+                                <div class="meet-room-pill" id="btnCopyRoomHeader" title="Копировать код">
+                                    <span id="meetRoomCodeText">ROOM</span>
+                                    <i data-lucide="copy" style="width: 14px; height: 14px;"></i>
+                                </div>
+                            </div>
+
+                            <div class="meet-bar-center">
+                                <button class="meet-btn" id="btnCollapseBar" title="Скрыть панель">
+                                    <i data-lucide="chevron-down" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn" id="btnToggleMic" title="Микрофон">
+                                    <i data-lucide="mic" style="width: 20px; height: 20px;" id="iconMic"></i>
+                                </button>
+                                <button class="meet-btn" id="btnToggleCam" title="Камера">
+                                    <i data-lucide="video" style="width: 20px; height: 20px;" id="iconCam"></i>
+                                </button>
+                                <button class="meet-btn hide-mobile" id="btnFlipCam" title="Сменить камеру">
+                                    <i data-lucide="switch-camera" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn hide-mobile" id="btnToggleScreen" title="Поделиться экраном">
+                                    <i data-lucide="monitor-up" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn hide-mobile" id="btnToggleHand" title="Поднять руку">
+                                    <i data-lucide="hand" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn" id="btnOpenReactions" title="Реакции">
+                                    <i data-lucide="smile" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn show-mobile-only" id="btnOpenMobileSheet" title="Ещё">
+                                    <i data-lucide="more-vertical" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn meet-btn-danger" id="btnLeaveCall" title="Завершить звонок">
+                                    <i data-lucide="phone-off" style="width: 20px; height: 20px;"></i>
+                                </button>
+                            </div>
+
+                            <div class="meet-bar-right hide-mobile">
+                                <button class="meet-btn" id="btnOpenInviteInfo" title="Информация о встрече">
+                                    <i data-lucide="info" style="width: 20px; height: 20px;"></i>
+                                </button>
+                                <button class="meet-btn relative" id="btnToggleChat" title="Чат">
+                                    <i data-lucide="message-square" style="width: 20px; height: 20px;"></i>
+                                    <span class="chat-unread-dot hidden" id="chatUnreadDot"></span>
+                                </button>
+                            </div>
+                        </footer>
+                        <button type="button" class="meet-bar-peek hidden" id="btnExpandBar" title="Показать панель">
+                            <i data-lucide="chevron-up" style="width: 18px; height: 18px;"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- RIGHT PANE: Chat Drawer -->
+                <aside class="chat-drawer hidden" id="chatDrawer">
+                    <div class="chat-header">
+                        <div class="chat-header-title">
+                            <i data-lucide="message-square" style="width: 18px; height: 18px;"></i>
+                            <span>Сообщения встречи</span>
+                        </div>
+                        <button class="tile-action-btn" id="btnCloseChat" title="Закрыть чат">
+                            <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+                        </button>
+                    </div>
+
+                    <div class="chat-messages" id="chatMessagesList"></div>
+
+                    <div class="chat-input-box">
+                        <input class="studio-input" id="chatInputText" placeholder="Отправить сообщение..." />
+                        <button type="button" class="send-btn" id="btnSendChat">
+                            <i data-lucide="send" style="width: 18px; height: 18px;"></i>
+                        </button>
+                    </div>
+                </aside>
+            </div>
+        </main>
+
+        <!-- MODALS & SHEETS -->
+        <!-- Settings Modal (Vertical Sidebar Layout) -->
+        <div class="p2p-modal-backdrop hidden" id="modalSettings">
+            <div class="studio-modal modal-settings-vertical" role="dialog">
+                <div class="modal-header">
+                    <div class="modal-title">
+                        <i data-lucide="settings" style="width: 18px; height: 18px;"></i>
+                        <span>Настройки</span>
+                    </div>
+                    <button type="button" class="tile-action-btn btnCloseModal" aria-label="Закрыть">
+                        <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+                    </button>
+                </div>
+
+                <div class="settings-modal-split">
+                    <!-- Left Vertical Tabbar -->
+                    <aside class="settings-v-tabbar">
+                        <button type="button" class="settings-v-tab-btn active" data-tab="devices">
+                            <i data-lucide="video" style="width: 16px; height: 16px;"></i>
+                            <span>Оборудование</span>
+                        </button>
+                        <button type="button" class="settings-v-tab-btn" data-tab="ui">
+                            <i data-lucide="volume-2" style="width: 16px; height: 16px;"></i>
+                            <span>Интерфейс & Звук</span>
+                        </button>
+                        <button type="button" class="settings-v-tab-btn" data-tab="admin">
+                            <i data-lucide="shield" style="width: 16px; height: 16px;"></i>
+                            <span>Админ</span>
+                        </button>
+                    </aside>
+
+                    <!-- Right Content Area -->
+                    <section class="settings-v-content">
+                        <!-- Devices Tab -->
+                        <div class="settings-stack tab-content" id="tabDevices">
+                            <div class="settings-form-group">
+                                <label class="studio-label">Камера</label>
+                                <select class="studio-select" id="selectVideoDevice"></select>
+                            </div>
+                            <div class="settings-form-group">
+                                <label class="studio-label">Микрофон</label>
+                                <select class="studio-select" id="selectAudioDevice"></select>
+                            </div>
+                            <label class="settings-switch-row">
+                                <label class="shad-switch">
+                                    <input type="checkbox" id="switchMirrorCam" checked>
+                                    <span class="shad-slider"></span>
+                                </label>
+                                <span>Зеркалировать собственную камеру</span>
+                            </label>
+                            <button type="button" class="studio-btn-primary" id="btnApplyDevices">Применить
+                                оборудование</button>
+                        </div>
+
+                        <!-- UI Tab -->
+                        <div class="settings-stack tab-content hidden" id="tabUi">
+                            <label class="settings-switch-row">
+                                <label class="shad-switch">
+                                    <input type="checkbox" id="switchSoundFx" checked>
+                                    <span class="shad-slider"></span>
+                                </label>
+                                <span>Звуковые эффекты</span>
+                            </label>
+                            <label class="settings-switch-row">
+                                <label class="shad-switch">
+                                    <input type="checkbox" id="switchChatToasts" checked>
+                                    <span class="shad-slider"></span>
+                                </label>
+                                <span>Всплывающие сообщения поверх видео</span>
+                            </label>
+                            <div class="settings-form-group">
+                                <label class="studio-label" id="labelSoundVol">Громкость звуков (50%)</label>
+                                <input type="range" class="studio-range" id="rangeSoundVol" min="0" max="1" step="0.05"
+                                    value="0.5">
+                            </div>
+                        </div>
+
+                        <!-- Admin Tab -->
+                        <div class="settings-stack tab-content hidden" id="tabAdmin">
+                            <div class="admin-status-box" id="adminStatusText">
+                                <i data-lucide="shield-alert" style="width: 16px; height: 16px;"></i>
+                                <span id="adminStatusMsg">Участник</span>
+                            </div>
+                            <div id="adminControlsBlock">
+                                <label class="settings-switch-row">
+                                    <label class="shad-switch">
+                                        <input type="checkbox" id="switchLockRoom">
+                                        <span class="shad-slider"></span>
+                                    </label>
+                                    <span>Заблокировать комнату</span>
+                                </label>
+                                <label class="settings-switch-row" style="margin-top: 10px;">
+                                    <label class="shad-switch">
+                                        <input type="checkbox" id="switchAllowScreen" checked>
+                                        <span class="shad-slider"></span>
+                                    </label>
+                                    <span>Разрешить демонстрацию экрана</span>
+                                </label>
+                                <div class="settings-form-group" style="margin-top: 14px;">
+                                    <label class="studio-label">Участники (<span id="adminPeerCount">1</span>)</label>
+                                    <div class="participants-list" id="adminPeerList"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+
+        <!-- Invite Modal -->
+        <div class="p2p-modal-backdrop hidden" id="modalInvite">
+            <div class="studio-modal">
+                <div class="modal-header">
+                    <div class="modal-title">
+                        <i data-lucide="user-plus" style="width: 18px; height: 18px;"></i>
+                        <span>Пригласить участников</span>
+                    </div>
+                    <button type="button" class="tile-action-btn btnCloseModal">
+                        <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+                    </button>
+                </div>
+                <div class="invite-body">
+                    <div class="invite-code-label">КОД ВСТРЕЧИ</div>
+                    <div class="invite-code" id="inviteCodeDisplay">-----</div>
+                    <div class="invite-qr-wrap" id="inviteQrContainer"></div>
+                    <button type="button" class="studio-btn-primary" style="width: 100%;" id="btnCopyInviteLink">
+                        <i data-lucide="link" style="width: 16px; height: 16px;"></i> Скопировать ссылку
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit Modal -->
+        <div class="p2p-modal-backdrop hidden" id="modalAudit">
+            <div class="studio-modal modal-large">
+                <div class="modal-header">
+                    <div class="modal-title">
+                        <i data-lucide="terminal-square" style="color: #facc15; width: 18px; height: 18px;"></i>
+                        <span>Системный аудит</span>
+                    </div>
+                    <div class="modal-header-actions">
+                        <button type="button" class="studio-btn-compact" id="btnCopyLogs">
+                            <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Копировать
+                        </button>
+                        <button type="button" class="studio-btn-compact" id="btnClearLogs">Очистить</button>
+                        <button type="button" class="tile-action-btn btnCloseModal">
+                            <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="log-terminal-window" id="auditLogTerminal"></div>
+            </div>
+        </div>
+
+        <!-- Mobile Action Sheet -->
+        <div class="p2p-modal-backdrop sheet-backdrop hidden" id="sheetMobile">
+            <div class="meet-bottom-sheet">
+                <div class="sheet-drag-handle"></div>
+                <div class="sheet-grid-actions">
+                    <button type="button" class="sheet-tile-btn" id="mSheetHand">
+                        <i data-lucide="hand" style="width: 22px; height: 22px;"></i>
+                        <span>Поднять руку</span>
+                    </button>
+                    <button type="button" class="sheet-tile-btn" id="mSheetScreen">
+                        <i data-lucide="monitor-up" style="width: 22px; height: 22px;"></i>
+                        <span>Экран</span>
+                    </button>
+                    <button type="button" class="sheet-tile-btn" id="mSheetFlipCam">
+                        <i data-lucide="switch-camera" style="width: 22px; height: 22px;"></i>
+                        <span>Сменить камеру</span>
+                    </button>
+                    <button type="button" class="sheet-tile-btn" id="mSheetAudit">
+                        <i data-lucide="terminal-square" style="color: #facc15; width: 22px; height: 22px;"></i>
+                        <span>Аудит</span>
+                    </button>
+                </div>
+                <div class="sheet-list-actions">
+                    <button type="button" class="sheet-list-item" id="mSheetChat">
+                        <i data-lucide="message-square" style="width: 20px; height: 20px;"></i>
+                        <span>Сообщения встречи</span>
+                    </button>
+                    <button type="button" class="sheet-list-item" id="mSheetInvite">
+                        <i data-lucide="user-plus" style="width: 20px; height: 20px;"></i>
+                        <span>Пригласить участников</span>
+                    </button>
+                    <button type="button" class="sheet-list-item" id="mSheetSettings">
+                        <i data-lucide="settings" style="width: 20px; height: 20px;"></i>
+                        <span>Настройки</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Context Dropdown Menu -->
+        <div class="dropdown-menu hidden" id="tileDropdownMenu">
+            <button type="button" class="dropdown-item" id="ddPinBtn">
+                <i data-lucide="pin" style="width: 14px; height: 14px;"></i> Закрепить
+            </button>
+            <button type="button" class="dropdown-item" id="ddFullscreenBtn">
+                <i data-lucide="maximize" style="width: 14px; height: 14px;"></i> Во весь экран
+            </button>
+            <button type="button" class="dropdown-item destructive hidden" id="ddKickBtn">
+                <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i> Исключить
+            </button>
+        </div>
+
+        <!-- Toast Container -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <!-- Main Logic Script -->
+    <script type="module" src="scripts.js"></script>
+</body>
+
 </html>
